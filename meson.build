@@ -80,3 +80,11 @@ gnome.post_install(
   glib_compile_schemas: true,
   update_desktop_database: true,
 )
+
+# Checks of the packaging files (doap, Flatpak manifest, CI, dependency
+# minimums)
+test(
+  'check-packaging',
+  find_program('python3'),
+  args: [meson.project_source_root() / 'build-aux' / 'check-packaging.py', meson.project_source_root()],
+)

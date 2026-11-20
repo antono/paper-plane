@@ -22,8 +22,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # (commit, feature, file, original, mutated, expected failure)
-# The expected failure is "unit:<test path>", "gtk" (ui::tests::gtk) or
-# "e2e:<test name>".
+# The expected failure is "unit:<test path>", "gtk" (ui::tests::gtk),
+# "pack:<check>" (build-aux/check-packaging.py) or "e2e:<test name>".
 MUTATIONS = [
     ("f966e155", "voice notes: waveform", "src/ui/components/waveform.rs",
      "let decoded = glib::base64_decode(waveform);",
@@ -109,6 +109,32 @@ MUTATIONS = [
     ("438e5f0c", "MediaDownloadButton registered", "src/ui/mod.rs",
      "    MediaDownloadButton::static_type();\n", "",
      "gtk"),
+    # Packaging
+    ("d61f344a", "doap syntax", "PaperPlane.doap",
+     "</Project>", "", "pack:doap is well formed"),
+    ("d7cfd284", "old GL renderer in the Flatpak", "build-aux/app.drey.PaperPlane.Devel.json",
+     '"--env=GSK_RENDERER=gl",', '', "pack:flatpak uses the old GL renderer"),
+    ("55153962", "GNOME 50 runtime", "build-aux/app.drey.PaperPlane.Devel.json",
+     '"runtime-version": "50",', '"runtime-version": "49",', "pack:flatpak runtime is GNOME 50"),
+    ("8261f0c9", "Flatpak uses the GTK of the runtime", "build-aux/app.drey.PaperPlane.Devel.json",
+     '"modules": [', '"modules": [{"name": "gtk", "buildsystem": "meson", "sources": []},',
+     "pack:flatpak uses the GTK of the runtime"),
+    ("bf97c861", "TDLib built in the Flatpak", "build-aux/app.drey.PaperPlane.Devel.json",
+     '"name": "tdlib",', '"name": "tdlib-gone",',
+     "pack:flatpak builds TDLib from source, found with pkg-config"),
+    ("aef472b4", "CI image of the runtime", ".github/workflows/ci.yml",
+     "flatpak-github-actions:gnome-50", "flatpak-github-actions:gnome-47",
+     "pack:CI builds with the image of the Flatpak runtime"),
+    ("6f2be144", "dependency minimums", "meson.build",
+     "dependency('gtk4', version: '>= 4.16')", "dependency('gtk4', version: '>= 4.12')",
+     "pack:meson requires the library versions the Rust bindings use"),
+    ("2a3fff37", "new clone! syntax", "src/model/message.rs",
+     "    pub(crate) fn toggle_reaction(", "    // clone!(@weak obj => move || {})\n    pub(crate) fn toggle_reaction(",
+     "pack:no clone! of the old syntax"),
+    ("b6522213", "removed autoplay setting", "data/app.drey.PaperPlane.gschema.xml.in",
+     '    <key name="run-in-background" type="b">',
+     '    <key name="autoplay-videos" type="b"><default>false</default></key>\n    <key name="run-in-background" type="b">',
+     "pack:the removed autoplay setting left nothing behind"),
     # End to end
     ("78359245", "message loading around the anchor (e2e)", "src/model/chat_history_model.rs",
      "let anchor = if chat.unread_count() > 0 {", "let anchor = if chat.unread_count() < 0 {",
@@ -131,6 +157,16 @@ MUTATIONS = [
 
 def run(cmd, **kwargs):
     return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, **kwargs)
+
+
+def pack_failure(build, check):
+    run(["meson", "test", "-C", build, "check-packaging"])
+    log = (pathlib.Path(build) / "meson-logs/testlog.txt").read_text(errors="replace")
+    if f"ok {check}" in log:
+        return False, log
+    if f"FAIL {check}" in log:
+        return True, log
+    return None, log
 
 
 def unit_failures(build):
@@ -187,6 +223,9 @@ def main():
             file.write_text(source.replace(original, mutated))
             if is_e2e:
                 failed, log = e2e_failure(args, expected[4:])
+                detail = expected
+            elif expected.startswith("pack:"):
+                failed, log = pack_failure(args.build, expected[5:])
                 detail = expected
             else:
                 failed, log = unit_failures(args.build)

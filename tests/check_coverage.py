@@ -61,6 +61,11 @@ def main():
             # testlog.txt: "test: <suite> - <project>:<name>" ... "result: exit status 0"
             pattern = rf"^test:\s+.*:{re.escape(name)}\n(?:.*\n){{0,3}}?result:\s+exit status 0$"
             return re.search(pattern, meson_log, re.M) is not None
+        if kind == "pack":
+            # build-aux/check-packaging.py, run as the check-packaging test
+            return f"ok {name}" in meson_log.splitlines() or any(
+                l.strip() == f"ok {name}" for l in meson_log.splitlines()
+            )
         if kind == "e2e":
             return f"ok   {name}" in e2e_log
         if kind == "fake":
