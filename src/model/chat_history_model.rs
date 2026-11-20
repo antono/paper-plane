@@ -536,6 +536,20 @@ impl ChatHistoryModel {
     }
 
     fn push_front(&self, message: model::Message) {
+        // A history opened while a message was being sent may already have
+        // loaded it from TDLib when its new-message update arrives.
+        // (Members of albums are not rows; their album ignores duplicates.)
+        let id = message.id();
+        let is_row = self
+            .imp()
+            .list
+            .borrow()
+            .iter()
+            .any(|item| item.message().is_some_and(|m| m.id() == id));
+        if is_row {
+            return;
+        }
+
         match self.handle_album_message(&message) {
             AlbumHandling::Row => {
                 self.imp()
@@ -1122,6 +1136,21 @@ mod tests {
 
             f.delete(&[3]);
             assert_eq!(rows(&model), [(2, 0)]);
+        });
+    }
+
+    #[test]
+    fn a_message_already_in_the_list_is_not_added_again() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            f.text(1);
+            f.text(2);
+            // The same message again, e.g. loaded by a history opened while
+            // it was being sent, then announced by updateNewMessage.
+            f.text(2);
+            assert_eq!(rows(&model), [(2, 0), (1, 0)]);
         });
     }
 
