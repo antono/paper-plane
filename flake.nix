@@ -107,12 +107,71 @@
             platforms = pkgs.lib.platforms.linux;
           };
         };
+
+        # The Devel profile, which has the automation actions of the
+        # end-to-end tests (src/automation.rs).
+        paper-plane-devel =
+          self.packages.${pkgs.stdenv.hostPlatform.system}.paper-plane.overrideAttrs
+            (old: {
+              pname = "paper-plane-devel";
+              mesonFlags = (old.mesonFlags or [ ]) ++ [ "-Dprofile=development" ];
+              doCheck = false;
+            });
+
+        # A scripted libtdjson for the end-to-end tests (tests/e2e).
+        fake-tdjson = pkgs.rustPlatform.buildRustPackage {
+          pname = "fake-tdjson";
+          version = "0.1.0";
+          src = pkgs.lib.cleanSource ./.;
+          cargoRoot = "tests/e2e/fake-tdjson";
+          buildAndTestSubdir = "tests/e2e/fake-tdjson";
+          cargoLock.lockFile = ./tests/e2e/fake-tdjson/Cargo.lock;
+          postInstall = ''
+            install -Dm644 "$(find target -name libtdjson.so -path '*/release/*' | head -1)" \
+              $out/lib/libtdjson.so
+          '';
+        };
       });
 
-      # nix flake check builds the application and runs its tests.
-      checks = forAllSystems (pkgs: {
-        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) paper-plane;
-      });
+      checks = forAllSystems (
+        pkgs:
+        let
+          packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        {
+          # Builds the application and runs its Meson tests.
+          inherit (packages) paper-plane fake-tdjson;
+
+          # Drives the Devel build against the fake TDLib, see tests/e2e.
+          e2e =
+            pkgs.runCommand "paper-plane-e2e"
+              {
+                nativeBuildInputs = with pkgs; [
+                  dbus
+                  glib.bin # gdbus
+                  python3
+                  xvfb-run
+                ];
+                FONTCONFIG_FILE = pkgs.makeFontsConf {
+                  fontDirectories = [
+                    pkgs.cantarell-fonts
+                    pkgs.dejavu_fonts
+                  ];
+                };
+              }
+              ''
+                export HOME=$TMPDIR XDG_RUNTIME_DIR=$TMPDIR
+                mkdir -p $out
+                GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 \
+                  dbus-run-session --config-file=${pkgs.dbus}/share/dbus-1/session.conf \
+                  xvfb-run -a -s "-screen 0 1280x800x24" \
+                  python3 ${./tests/e2e}/run.py \
+                    --app ${packages.paper-plane-devel}/bin/paper-plane \
+                    --fake-lib ${packages.fake-tdjson}/lib/libtdjson.so \
+                    --artifacts $out
+              '';
+        }
+      );
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
