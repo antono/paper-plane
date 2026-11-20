@@ -1,0 +1,13 @@
+{
+  "auth": "ready",
+  "me": { "id": 137, "name": "Test User" },
+  "chats": [
+    {
+      "with": { "id": 1005, "name": "Erin Example" },
+      "filler": 299,
+      "messages": [
+        { "id": 300, "text": "The newest message from Erin", "ago": 30 }
+      ]
+    }
+  ]
+}

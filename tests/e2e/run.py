@@ -435,12 +435,46 @@ def test_sending_reveals_the_message(app):
     )
 
     app.action("auto-send-text", "'Can you see this?'")
-    app.wait_for(
+    state = app.wait_for(
         "the sent message at the bottom of the view",
         lambda: (s := app.state())
         and any(text == "Can you see this?" for _, text in s["messages"])
-        and at_bottom(s),
+        and at_bottom(s)
+        and s,
     )
+    sent = [id_ for id_, text in state["messages"] if text == "Can you see this?"]
+    assert len(sent) == 1, f"the sent message is shown {len(sent)} times"
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_long_chat_opens_at_the_bottom(app):
+    """A long chat without unread messages opens at its newest messages,
+    loading a page, not the whole history; a sent message is shown once at
+    the bottom."""
+    app.wait_until_logged_in()
+    app.open_chat(1005)
+    state = app.wait_for(
+        "the history of Erin's chat at the bottom",
+        lambda: (s := app.state()).get("open-chat", [None])[0] == "1005"
+        and "scroll" in s and float(s["scroll"][2]) > float(s["scroll"][1])
+        and at_bottom(s) and s,
+    )
+    time.sleep(1)
+    state = app.state()
+    assert at_bottom(state), state["scroll"]
+    ids = [id_ for id_, _ in state["messages"]]
+    assert ids[0] == 300, ids[:3]
+    assert len(ids) < 150, f"{len(ids)} of 300 messages loaded at once"
+
+    app.action("auto-send-text", "'Hello Erin'")
+    state = app.wait_for(
+        "the sent message at the bottom",
+        lambda: (s := app.state())
+        and any(text == "Hello Erin" and 1 << 30 <= id_ < 1 << 40 for id_, text in s["messages"])
+        and at_bottom(s) and s,
+    )
+    assert [t for _, t in state["messages"]].count("Hello Erin") == 1
     app.quit()
     app.assert_all_requests_supported()
 
@@ -453,6 +487,7 @@ TESTS = [
     ("media-replies-reactions-and-permissions", "rich-chat.json", test_media_replies_reactions_and_permissions),
     ("runs-in-the-background", "two-chats.json", test_runs_in_the_background),
     ("sending-reveals-the-message", "long-chat.json", test_sending_reveals_the_message),
+    ("long-chat-opens-at-the-bottom", "long-read-chat.json", test_long_chat_opens_at_the_bottom),
 ]
 
 

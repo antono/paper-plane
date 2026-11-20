@@ -96,3 +96,7 @@ independent review, 2026-11-20):
   the sponsored message label, `register_user` (c7e6d966, 1e1e3ad7).
 - The Replies chat branches of the bubble, the sidebar sender label and the
   mute bar, and its test-DC id 708513 (91b84d0e).
+- Shutdown races: futures that outlive the session and call `session_()`
+  (an `unwrap`) crash on quit. The ones the end-to-end tests hit are fixed
+  (chat history loading, chat list paging); about 15 other calls in
+  src/model are not checked.
