@@ -61,6 +61,7 @@ class App:
                 "PAPER_PLANE_AUTOMATION_DIR": str(self.out),
                 "FAKE_TDJSON_SCENARIO": str(scenario),
                 "FAKE_TDJSON_LOG": str(self.request_log),
+                "FAKE_TDJSON_FILES": str(self.root / "files"),
                 "LD_LIBRARY_PATH": os.pathsep.join(
                     filter(None, [str(lib_dir), env.get("LD_LIBRARY_PATH")])
                 ),
@@ -120,11 +121,15 @@ class App:
         path.unlink(missing_ok=True)
         self.action("auto-state")
         text = self.wait_for("state.txt", lambda: path.exists() and path.read_text(), 5)
-        state = {"messages": []}
+        state = {"messages": [], "reactions": {}, "can-edit": {}, "reply": []}
         for line in text.splitlines():
             fields = line.split("\t")
             if fields[0] == "message":
                 state["messages"].append((int(fields[1]), fields[2]))
+            elif fields[0] in ("reactions", "can-edit"):
+                state[fields[0]][int(fields[1])] = fields[2]
+            elif fields[0] == "reply":
+                state["reply"].append(fields[1])
             else:
                 state[fields[0]] = fields[1:]
         return state
@@ -240,7 +245,10 @@ def test_chat_list_open_and_send(app):
     state = app.wait_for(
         "the sent message in the history",
         lambda: (s := app.state())
-        and any(text == "Hello from the e2e test" and id_ >= 1 << 30 for id_, text in s["messages"])
+        and any(
+            text == "Hello from the e2e test" and 1 << 30 <= id_ < 1 << 40
+            for id_, text in s["messages"]
+        )
         and s,
     )
     sent = app.requests("sendMessage")
@@ -299,11 +307,125 @@ def test_survives_unsupported_auth_state(app):
     app.quit()
 
 
+def test_media_replies_reactions_and_permissions(app):
+    app.wait_until_logged_in()
+    app.action("auto-open-chat", "int64 1003")
+    app.wait_for(
+        "the history of Carol's chat",
+        lambda: len(app.state()["messages"]) == 4,
+    )
+
+    # The photo is downloaded and shown once the download completes: the
+    # progress and completion reach the waiting widget (7679e134).
+    downloads = app.wait_for("the photo download", lambda: app.requests("downloadFile"))
+    assert downloads[0]["request"]["file_id"] == 103001, downloads
+    app.wait_for("the photo on screen", lambda: int(app.state()["pictures"][0]) >= 1)
+
+    # The reply shows the message it replies to (78359245).
+    app.wait_for(
+        "the reply preview",
+        lambda: any("Sunset at the lake" in r for r in app.state()["reply"]),
+    )
+
+    # A reaction is added and removed again through the model
+    # (Message::toggle_reaction, 18fb29ce).
+    assert app.state()["reactions"][3] == "👍2"
+    app.action("auto-react", "(int64 3, '👍')")
+    app.wait_for("the added reaction", lambda: app.state()["reactions"][3] == "👍3*")
+    assert app.requests("addMessageReaction")[0]["request"]["message_id"] == 3
+    app.action("auto-react", "(int64 3, '👍')")
+    app.wait_for("the removed reaction", lambda: app.state()["reactions"][3] == "👍2")
+    assert app.requests("removeMessageReaction"), "the reaction was not removed"
+
+    # Whether a message can be edited comes from getMessageProperties, which
+    # is only fetched when its menu opens, not for every loaded message
+    # (78359245, 1e1e3ad7).
+    assert not app.requests("getMessageProperties"), "properties fetched before a menu opened"
+    assert app.state()["can-edit"][4] == "false"
+    app.action("auto-fetch-properties", "int64 4")
+    app.action("auto-fetch-properties", "int64 3")
+    app.wait_for(
+        "the message properties",
+        lambda: app.state()["can-edit"].get(4) == "true",
+    )
+    assert app.state()["can-edit"][3] == "false"
+    asked = {r["request"]["message_id"] for r in app.requests("getMessageProperties")}
+    assert {3, 4} <= asked, asked
+
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_runs_in_the_background(app):
+    """With run-in-background (the default), closing the window keeps the
+    application running without an open chat; activating it again shows the
+    window and reopens the chat (5418fc72)."""
+    app.wait_until_logged_in()
+    app.action("auto-open-chat", "int64 1001")
+    app.wait_for("the opened chat", lambda: app.requests("openChat"))
+    opened = len(app.requests("openChat"))
+
+    app.action("auto-close-window")
+    app.wait_for("the hidden window", lambda: app.state()["window"][0] == "false")
+    app.wait_for("the closed chat", lambda: app.requests("closeChat"))
+    time.sleep(1)
+    app.assert_alive()
+
+    result = subprocess.run(
+        ["gdbus", "call", "--session", "--dest", APP_ID, "--object-path", OBJECT_PATH,
+         "--method", "org.freedesktop.Application.Activate", "{}"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    app.wait_for("the window again", lambda: app.state()["window"][0] == "true")
+    app.wait_for("the reopened chat", lambda: len(app.requests("openChat")) > opened)
+
+    # Without run-in-background, closing the window quits.
+    app.action("auto-set-boolean", "('run-in-background', false)")
+    app.action("auto-close-window")
+    try:
+        code = app.process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        raise Failure("closing the window did not quit")
+    assert code == 0, code
+    assert app.requests("close"), "TDLib was not closed"
+
+
+def at_bottom(state):
+    value, page, upper = (float(x) for x in state["scroll"])
+    return value + page >= upper - 2
+
+
+def test_sending_reveals_the_message(app):
+    """A message sent in a long chat with unread messages ends up in view at
+    the bottom of the history, as in the official clients."""
+    app.wait_until_logged_in()
+    app.action("auto-open-chat", "int64 1004")
+    app.wait_for(
+        "the history of Dave's chat",
+        lambda: (s := app.state()).get("open-chat", [None])[0] == "1004"
+        and len(s["messages"]) > 20 and "scroll" in s and s,
+    )
+
+    app.action("auto-send-text", "'Can you see this?'")
+    app.wait_for(
+        "the sent message at the bottom of the view",
+        lambda: (s := app.state())
+        and any(text == "Can you see this?" for _, text in s["messages"])
+        and at_bottom(s),
+    )
+    app.quit()
+    app.assert_all_requests_supported()
+
+
 TESTS = [
     ("chat-list-open-and-send", "two-chats.json", test_chat_list_open_and_send),
     ("login-with-phone-number", "login.json", test_login_with_phone_number),
     ("survives-failing-view-messages", "view-messages-fails.json", test_survives_failing_view_messages),
     ("survives-unsupported-auth-state", "email-login.json", test_survives_unsupported_auth_state),
+    ("media-replies-reactions-and-permissions", "rich-chat.json", test_media_replies_reactions_and_permissions),
+    ("runs-in-the-background", "two-chats.json", test_runs_in_the_background),
+    ("sending-reveals-the-message", "long-chat.json", test_sending_reveals_the_message),
 ]
 
 

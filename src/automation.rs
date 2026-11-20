@@ -53,6 +53,16 @@ fn write_artifact(name: &str, contents: &[u8]) {
     }
 }
 
+/// Calls `f` for `widget` and all its descendants.
+fn walk(widget: &gtk::Widget, f: &mut dyn FnMut(&gtk::Widget)) {
+    f(widget);
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        walk(&c, f);
+        child = c.next_sibling();
+    }
+}
+
 /// The first descendant of `widget` of type `T`, depth first.
 fn descendant<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Option<T> {
     if let Some(found) = widget.downcast_ref::<T>() {
@@ -106,6 +116,41 @@ impl Application {
                 app.auto_submit_phone(phone);
             }
         });
+        self.add_auto_action(
+            "auto-set-boolean",
+            Some(glib::VariantTy::new("(sb)").unwrap()),
+            |_, p| match p.and_then(|p| p.get::<(String, bool)>()) {
+                Some((key, value)) => {
+                    let settings = gio::Settings::new(config::APP_ID);
+                    if let Err(e) = settings.set_boolean(&key, value) {
+                        log::warn!("auto-set-boolean: {e}");
+                    }
+                }
+                None => log::warn!("auto-set-boolean: missing parameters"),
+            },
+        );
+        self.add_auto_action("auto-close-window", None, |app, _| {
+            // As the window's close button does
+            if let Some(window) = app.auto_window() {
+                window.close();
+            }
+        });
+        self.add_auto_action("auto-react", Some(glib::VariantTy::new("(xs)").unwrap()), |app, p| {
+            match p.and_then(|p| p.get::<(i64, String)>()) {
+                Some((message_id, emoji)) => match app.open_chat_message(message_id) {
+                    Some(message) => message.toggle_reaction(&emoji),
+                    None => log::warn!("auto-react: message {message_id} is not loaded"),
+                },
+                None => log::warn!("auto-react: missing parameters"),
+            }
+        });
+        self.add_auto_action("auto-fetch-properties", Some(glib::VariantTy::INT64), |app, p| {
+            match p.and_then(|p| p.get::<i64>()).and_then(|id| app.open_chat_message(id)) {
+                // What opening the context menu of the message does
+                Some(message) => message.fetch_properties(),
+                None => log::warn!("auto-fetch-properties: message not loaded"),
+            }
+        });
         self.add_auto_action("auto-submit-code", Some(glib::VariantTy::STRING), |app, p| {
             if let Some(code) = p.and_then(|p| p.get::<String>()) {
                 app.auto_submit_code(code);
@@ -128,8 +173,11 @@ impl Application {
         self.add_action(&action);
     }
 
+    /// The main window, also while it is hidden (running in the background).
     fn auto_window(&self) -> Option<ui::Window> {
-        self.active_window().and_downcast::<ui::Window>()
+        self.windows()
+            .into_iter()
+            .find_map(|w| w.downcast::<ui::Window>().ok())
     }
 
     fn active_client(&self) -> Option<model::Client> {
@@ -138,6 +186,18 @@ impl Application {
 
     fn active_client_id(&self) -> Option<ClientId> {
         self.active_client().map(|client| client.id())
+    }
+
+    /// The chat shown in the chat history, if any.
+    fn open_chat(&self) -> Option<model::Chat> {
+        self.auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
+            .and_then(|history| history.chat())
+    }
+
+    /// A loaded message of the open chat.
+    fn open_chat_message(&self, id: i64) -> Option<model::Message> {
+        self.open_chat()?.message(id)
     }
 
     fn active_session(&self) -> Option<model::ClientStateSession> {
@@ -212,8 +272,72 @@ impl Application {
                             message.id(),
                             crate::strings::message_content(message)
                         ));
+                        let reactions: Vec<String> = message
+                            .interaction_info()
+                            .reactions()
+                            .0
+                            .iter()
+                            .map(|r| {
+                                let emoji = match &r.r#type {
+                                    tdlib::enums::ReactionType::Emoji(e) => e.emoji.clone(),
+                                    _ => "?".to_owned(),
+                                };
+                                format!("{emoji}{}{}", r.total_count, if r.is_chosen { "*" } else { "" })
+                            })
+                            .collect();
+                        out.push_str(&format!(
+                            "reactions\t{}\t{}\n",
+                            message.id(),
+                            reactions.join(",")
+                        ));
+                        out.push_str(&format!(
+                            "can-edit\t{}\t{}\n",
+                            message.id(),
+                            message.can_be_edited()
+                        ));
                     }
                 }
+            }
+        }
+
+        // What the chat history shows: the pictures with content and the
+        // replies with the text of their target.
+        if let Some(history) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
+        {
+            let mut pictures = 0;
+            let mut replies = vec![];
+            walk(history.upcast_ref(), &mut |widget| {
+                if let Some(picture) = widget.downcast_ref::<gtk::Picture>() {
+                    if picture.paintable().is_some() {
+                        pictures += 1;
+                    }
+                }
+                if widget.is::<ui::MessageReply>() {
+                    let mut texts = vec![];
+                    walk(widget, &mut |w| {
+                        if let Some(label) = w.downcast_ref::<gtk::Label>() {
+                            if !label.text().is_empty() {
+                                texts.push(label.text().to_string());
+                            }
+                        }
+                    });
+                    replies.push(texts.join(" | "));
+                }
+            });
+            out.push_str(&format!("pictures\t{pictures}\n"));
+            if let Some(scrolled) = descendant::<gtk::ScrolledWindow>(history.upcast_ref()) {
+                let adj = scrolled.vadjustment();
+                out.push_str(&format!(
+                    "scroll\t{}\t{}\t{}\n",
+                    adj.value(),
+                    adj.page_size(),
+                    adj.upper()
+                ));
+            }
+            for reply in replies {
+                out.push_str(&format!("reply\t{reply}\n"));
             }
         }
         write_artifact("state.txt", out.as_bytes());

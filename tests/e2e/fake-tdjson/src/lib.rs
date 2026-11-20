@@ -60,18 +60,46 @@ pub struct Engine {
     next_sent_id: i64,
     next_pending_id: i64,
     log: Option<std::fs::File>,
+    /// The reactions of every message, by chat and message id.
+    reactions: HashMap<(i64, i64), Vec<scenario::ReactionSpec>>,
+    /// Where downloaded files are written.
+    files_dir: std::path::PathBuf,
 }
+
+/// The photo every downloaded file is.
+const PHOTO: &[u8] = include_bytes!("../data/photo.png");
 
 impl Engine {
     pub fn new(scenario: Scenario, log: Option<std::fs::File>) -> Self {
         let mut messages = HashMap::new();
+        let mut reactions = HashMap::new();
+        let mut scenario = scenario;
+        for chat in &mut scenario.chats {
+            let first = chat.messages.iter().map(|m| m.id).min().unwrap_or(1);
+            let oldest_ago = chat.messages.iter().map(|m| m.ago).max().unwrap_or(0);
+            let filler = (1..=chat.filler).map(|n| scenario::MessageSpec {
+                id: first - chat.filler - 1 + n,
+                outgoing: n % 3 == 0,
+                text: format!("Message {n}"),
+                ago: oldest_ago + 60 * (chat.filler - n + 1) as i32,
+                photo: false,
+                reply_to: None,
+                reactions: vec![],
+            });
+            let mut all: Vec<_> = filler.collect();
+            all.append(&mut chat.messages);
+            chat.messages = all;
+        }
         for chat in &scenario.chats {
+            for m in &chat.messages {
+                reactions.insert((chat.with.id, m.id), m.reactions.clone());
+            }
             let chat_messages: BTreeMap<i64, types::Message> = chat
                 .messages
                 .iter()
                 .map(|m| {
                     let sender = if m.outgoing { scenario.me.id } else { chat.with.id };
-                    let message = scenario::text_message(
+                    let mut message = scenario::text_message(
                         chat.with.id,
                         m.id,
                         sender,
@@ -80,6 +108,15 @@ impl Engine {
                         &m.text,
                         None,
                     );
+                    if m.photo {
+                        message.content = scenario::photo_content(
+                            scenario::photo_file_id(chat.with.id, m.id),
+                            PHOTO.len() as i64,
+                            &m.text,
+                        );
+                    }
+                    message.reply_to = m.reply_to.map(|id| scenario::reply_to(chat.with.id, id));
+                    message.interaction_info = scenario::interaction_info(&m.reactions);
                     (m.id, message)
                 })
                 .collect();
@@ -95,6 +132,12 @@ impl Engine {
             next_sent_id: FIRST_SENT_MESSAGE_ID,
             next_pending_id: FIRST_PENDING_MESSAGE_ID,
             log,
+            reactions,
+            files_dir: std::env::var_os("FAKE_TDJSON_FILES")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::temp_dir().join(format!("fake-tdjson-{}", std::process::id()))
+                }),
         }
     }
 
@@ -348,6 +391,56 @@ impl Engine {
                 enums::Countries::Countries(types::Countries { countries: vec![] }),
                 extra,
             ),
+            "downloadFile" => {
+                let id = request["file_id"].as_i64().unwrap_or_default() as i32;
+                let path = self.files_dir.join(format!("{id}.png"));
+                if std::fs::create_dir_all(&self.files_dir)
+                    .and_then(|_| std::fs::write(&path, PHOTO))
+                    .is_err()
+                {
+                    self.error(client_id, extra, 500, "fake-tdjson cannot write the file");
+                    return true;
+                }
+                let file = scenario::file(id, path.to_str(), PHOTO.len() as i64);
+                self.emit(client_id, enums::File::File(file.clone()), extra);
+                self.update(client_id, enums::Update::File(types::UpdateFile { file }));
+            }
+            "addMessageReaction" | "removeMessageReaction" => {
+                let chat_id = request["chat_id"].as_i64().unwrap_or_default();
+                let message_id = request["message_id"].as_i64().unwrap_or_default();
+                let emoji = request["reaction_type"]["emoji"].as_str().unwrap_or_default().to_owned();
+                let adding = type_ == "addMessageReaction";
+                let reactions = self.reactions.entry((chat_id, message_id)).or_default();
+                match reactions.iter_mut().find(|r| r.emoji == emoji) {
+                    Some(reaction) if reaction.chosen != adding => {
+                        reaction.count += if adding { 1 } else { -1 };
+                        reaction.chosen = adding;
+                    }
+                    Some(_) => {}
+                    None if adding => reactions.push(scenario::ReactionSpec {
+                        emoji,
+                        count: 1,
+                        chosen: true,
+                    }),
+                    None => {}
+                }
+                reactions.retain(|r| r.count > 0);
+                let interaction_info = scenario::interaction_info(reactions);
+                if let Some(message) =
+                    self.messages.get_mut(&chat_id).and_then(|m| m.get_mut(&message_id))
+                {
+                    message.interaction_info = interaction_info.clone();
+                }
+                self.ok(client_id, extra);
+                self.update(
+                    client_id,
+                    enums::Update::MessageInteractionInfo(types::UpdateMessageInteractionInfo {
+                        chat_id,
+                        message_id,
+                        interaction_info,
+                    }),
+                );
+            }
             "sendMessage" => self.send_message(client_id, request, extra),
             "close" => {
                 self.ok(client_id, extra);

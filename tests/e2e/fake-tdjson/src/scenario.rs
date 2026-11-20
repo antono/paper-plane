@@ -54,6 +54,10 @@ pub struct ChatSpec {
     pub unread: i32,
     #[serde(default)]
     pub messages: Vec<MessageSpec>,
+    /// That many more messages ("Message <n>"), older than `messages`, one
+    /// minute apart, with the ids before theirs.
+    #[serde(default)]
+    pub filler: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,6 +70,23 @@ pub struct MessageSpec {
     /// Seconds before `now`.
     #[serde(default)]
     pub ago: i32,
+    /// A photo (with `text` as its caption), downloaded from the fake.
+    #[serde(default)]
+    pub photo: bool,
+    /// The message of the same chat that this one replies to.
+    #[serde(default)]
+    pub reply_to: Option<i64>,
+    #[serde(default)]
+    pub reactions: Vec<ReactionSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReactionSpec {
+    pub emoji: String,
+    pub count: i32,
+    /// Whether the user of the session chose it.
+    #[serde(default)]
+    pub chosen: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -332,4 +353,99 @@ pub fn message_properties(message: &types::Message) -> types::MessageProperties 
         has_protected_content_by_other_user: false,
         need_show_statistics: false,
     }
+}
+
+/// The id of the file of the photo of a message.
+pub fn photo_file_id(chat_id: i64, message_id: i64) -> i32 {
+    (100_000 + (chat_id % 1000) * 1000 + message_id) as i32
+}
+
+pub fn file(id: i32, path: Option<&str>, size: i64) -> types::File {
+    types::File {
+        id,
+        size,
+        expected_size: size,
+        local: types::LocalFile {
+            path: path.unwrap_or_default().to_owned(),
+            can_be_downloaded: true,
+            can_be_deleted: path.is_some(),
+            is_downloading_active: false,
+            is_downloading_completed: path.is_some(),
+            download_offset: 0,
+            downloaded_prefix_size: if path.is_some() { size } else { 0 },
+            downloaded_size: if path.is_some() { size } else { 0 },
+        },
+        remote: types::RemoteFile {
+            id: format!("remote-{id}"),
+            unique_id: format!("unique-{id}"),
+            is_uploading_active: false,
+            is_uploading_completed: true,
+            uploaded_size: size,
+        },
+    }
+}
+
+pub fn photo_content(file_id: i32, size: i64, caption: &str) -> enums::MessageContent {
+    enums::MessageContent::MessagePhoto(types::MessagePhoto {
+        photo: types::Photo {
+            has_stickers: false,
+            minithumbnail: None,
+            sizes: vec![types::PhotoSize {
+                r#type: "x".to_owned(),
+                photo: file(file_id, None, size),
+                width: 64,
+                height: 48,
+                progressive_sizes: vec![],
+            }],
+        },
+        video: None,
+        caption: types::FormattedText {
+            text: caption.to_owned(),
+            entities: vec![],
+        },
+        show_caption_above_media: false,
+        has_spoiler: false,
+        is_secret: false,
+    })
+}
+
+pub fn reply_to(chat_id: i64, message_id: i64) -> enums::MessageReplyTo {
+    enums::MessageReplyTo::Message(types::MessageReplyToMessage {
+        chat_id,
+        message_id,
+        quote: None,
+        checklist_task_id: 0,
+        poll_option_id: String::new(),
+        origin: None,
+        origin_send_date: 0,
+        content: None,
+    })
+}
+
+pub fn interaction_info(reactions: &[ReactionSpec]) -> Option<types::MessageInteractionInfo> {
+    if reactions.is_empty() {
+        return None;
+    }
+    Some(types::MessageInteractionInfo {
+        view_count: 0,
+        forward_count: 0,
+        reply_info: None,
+        reactions: Some(types::MessageReactions {
+            reactions: reactions
+                .iter()
+                .map(|r| types::MessageReaction {
+                    r#type: enums::ReactionType::Emoji(types::ReactionTypeEmoji {
+                        emoji: r.emoji.clone(),
+                    }),
+                    total_count: r.count,
+                    is_chosen: r.chosen,
+                    used_sender_id: None,
+                    recent_sender_ids: vec![],
+                })
+                .collect(),
+            are_tags: false,
+            paid_reactors: vec![],
+            can_get_added_reactions: false,
+        }),
+    })
 }
