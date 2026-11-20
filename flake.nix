@@ -109,6 +109,11 @@
         };
       });
 
+      # nix flake check builds the application and runs its tests.
+      checks = forAllSystems (pkgs: {
+        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) paper-plane;
+      });
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           nativeBuildInputs = nativeBuildInputsFor pkgs ++ [
