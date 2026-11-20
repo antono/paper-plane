@@ -454,6 +454,13 @@ impl ChatHistory {
                     if msg.is_outgoing() {
                         obj.imp().background.animate();
                     }
+                    // A message the user is sending from here is revealed,
+                    // even if the view was scrolled up, as in the official
+                    // clients (Yacha's 637fadfa in the modernization branch).
+                    if msg.is_outgoing() && msg.sending_state().is_some() {
+                        obj.set_sticky(true);
+                        obj.scroll_down();
+                    }
                 }
             ));
             imp.chat_handler.replace(Some(handler));
