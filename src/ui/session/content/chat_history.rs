@@ -814,9 +814,20 @@ impl ChatHistory {
             );
 
             utils::spawn(async move {
-                tdlib::functions::view_messages(chat_id, viewed_message_ids, None, true, client_id)
-                    .await
-                    .unwrap();
+                // TDLib can reject the request (a deleted chat, a network or
+                // server error); the messages are then reported again the next
+                // time they are viewed.
+                if let Err(e) = tdlib::functions::view_messages(
+                    chat_id,
+                    viewed_message_ids,
+                    None,
+                    true,
+                    client_id,
+                )
+                .await
+                {
+                    log::warn!("Could not mark messages of chat {chat_id} as viewed: {e:?}");
+                }
             });
         }
     }
