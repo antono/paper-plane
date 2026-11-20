@@ -809,7 +809,11 @@ impl ChatHistory {
         if imp.viewed_message_ids_changed.get() {
             imp.viewed_message_ids_changed.set(false);
 
-            let chat = self.chat().unwrap();
+            // The report is delayed, and the chat may have been closed in
+            // the meantime (switching chats, quitting).
+            let Some(chat) = self.chat() else {
+                return;
+            };
             let chat_id = chat.id();
             let client_id = chat.session_().client_().id();
             let viewed_message_ids =
@@ -872,6 +876,14 @@ pub(crate) fn gtk_check() {
         assert!(history.is_secret_chat());
         history.set_chat(Some(&alice));
         assert!(!history.is_secret_chat());
+
+        // The report of viewed messages is delayed (78359245); a chat closed
+        // in the meantime must not crash it. glib catches panics inside
+        // spawned futures, so the delayed call is made directly here.
+        eprintln!("delayed view report after closing the chat");
         history.set_chat(None);
+        history.imp().viewed_message_ids.borrow_mut().insert(1);
+        history.imp().viewed_message_ids_changed.set(true);
+        history.view_messages();
     });
 }
