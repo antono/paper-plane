@@ -151,7 +151,12 @@ class App:
     def requests(self, type_=None):
         if not self.request_log.exists():
             return []
-        lines = [json.loads(l) for l in self.request_log.read_text().splitlines()]
+        lines = []
+        for line in self.request_log.read_text().splitlines():
+            try:
+                lines.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass  # the fake is still writing this line
         return [l for l in lines if type_ is None or l["request"].get("@type") == type_]
 
     # --- lifecycle ---------------------------------------------------------
