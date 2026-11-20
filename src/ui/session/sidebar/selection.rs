@@ -286,3 +286,26 @@ impl Selection {
         }
     }
 }
+
+/// The selection of an empty chat list (eaa45b1e), see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("chat list selection without chats");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+
+        // Changing the selection of an empty list used to underflow
+        // (n_items - 1) and panic.
+        let selection: Selection = glib::Object::new();
+        selection.set_model(Some(gio::ListStore::new::<model::Chat>().upcast()));
+        selection.set_selected_position(0);
+        selection.set_selected_chat(Some(&chat));
+        selection.set_selected_chat(None);
+        assert_eq!(selection.n_items(), 0);
+        assert!(selection.selected_chat().is_none());
+    });
+}

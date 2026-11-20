@@ -375,6 +375,15 @@ mod tests {
     }
 
     #[test]
+    fn emoji_are_shown_in_colour() {
+        // U+FE0F asks for the emoji presentation, so emoji are drawn in
+        // colour; an explicit presentation is kept.
+        assert_eq!(emoji_string("👍"), "👍\u{FE0F}");
+        assert_eq!(emoji_string("❤\u{FE0F}"), "❤\u{FE0F}");
+        assert_eq!(emoji_string("❤\u{FE0E}"), "❤\u{FE0E}");
+    }
+
+    #[test]
     fn photo_sizes_for_scale_factors() {
         let sizes = [size("m", 320), size("x", 800), size("y", 1280), size("w", 2560)];
         assert_eq!(picked(&sizes, 1).as_deref(), Some("x"));

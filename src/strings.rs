@@ -858,3 +858,20 @@ fn message_contact_registered(sender: &model::MessageSender) -> String {
     let sender = message_sender(sender, true);
     gettext_f("{sender} joined Telegram", &[("sender", &sender)])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    #[test]
+    fn live_locations_are_named() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+            let message =
+                model::Message::new(&chat, message(ME, 1, DAY, 0, live_location(900)));
+            assert_eq!(message_content(&message), gettext("Live Location"));
+        });
+    }
+}

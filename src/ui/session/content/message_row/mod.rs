@@ -648,6 +648,7 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
 /// The checks of the message rows that need GTK, see `ui::tests`.
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
+    rows_gtk_check();
     label::gtk_check();
     reactions_chooser::gtk_check();
     video::gtk_check();
@@ -669,4 +670,71 @@ pub(crate) fn gtk_checks() {
         Some(label.clone())
     );
     assert_eq!(find_message_label(label.upcast_ref()), Some(label));
+}
+
+/// Which widget a message row shows, the Replies chat avatars and Copy Text.
+#[cfg(test)]
+fn rows_gtk_check() {
+    use adw::prelude::*;
+
+    use crate::model::test_support::*;
+
+    eprintln!("message rows: live locations, albums, Replies avatars, Copy Text");
+
+    const REPLIES: i64 = 1271266957;
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let history = model::ChatHistoryModel::new(&chat);
+        let content = |row: &Row| row.imp().content.borrow().clone().unwrap();
+
+        // A live location is shown like a location (#6a322b1f).
+        let live = model::Message::new(&chat, message(ME, 1, DAY, 0, live_location(900)));
+        let row = Row::new(live.upcast_ref());
+        assert!(content(&row).is::<ui::MessageLocation>());
+
+        // Albums of two or more are shown as an album grid (eaa45b1e), and
+        // the row follows when its representative changes.
+        new_message(&session, message(ME, 10, DAY, 77, photo("")));
+        let first = chat.message(10).unwrap();
+        let row = Row::new(first.upcast_ref());
+        assert!(content(&row).is::<ui::MessagePhoto>());
+        new_message(&session, message(ME, 11, DAY, 77, photo("")));
+        let row = Row::new(first.upcast_ref());
+        assert!(content(&row).is::<ui::MessageMediaAlbum>());
+
+        // In the Replies chat, a reply shows the avatar of its original
+        // author (#467).
+        add_user(&session, REPLIES);
+        add_user(&session, 42);
+        let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
+        let mut td_reply = message(REPLIES, 1, DAY, 0, text("a reply"));
+        td_reply.sender_id = tdlib::enums::MessageSender::User(tdlib::types::MessageSenderUser {
+            user_id: REPLIES,
+        });
+        td_reply.is_outgoing = false;
+        td_reply.forward_info = forwarded_from(42);
+        let reply = model::Message::new(&replies, td_reply);
+        let row = Row::new(reply.upcast_ref());
+        let avatar = row.imp().avatar.borrow().clone().expect("an avatar");
+        let user = avatar.item().and_downcast::<model::User>().unwrap();
+        assert_eq!(user.id(), 42);
+
+        // Copy Text puts the plain text of the message on the clipboard and
+        // says so (743880f7).
+        let overlay = adw::ToastOverlay::new();
+        let text_message =
+            model::Message::new(&chat, message(ME, 2, DAY, 0, text("copy *me*")));
+        let row = Row::new(text_message.upcast_ref());
+        overlay.set_child(Some(&row));
+        row.activate_action("message-row.copy-text", None).unwrap();
+        let copied = glib::MainContext::default()
+            .block_on(row.clipboard().read_text_future())
+            .unwrap()
+            .map(|t| t.to_string());
+        assert_eq!(copied.as_deref(), Some("copy *me*"));
+
+        drop(history);
+    });
 }

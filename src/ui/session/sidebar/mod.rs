@@ -245,4 +245,5 @@ impl Sidebar {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     row::gtk_check();
+    selection::gtk_check();
 }

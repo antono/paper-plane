@@ -968,3 +968,35 @@ async fn save_stream_to_file(
 
     Ok(())
 }
+
+/// Restoring the draft of a chat (6a322b1f, DraftMessageContent::Text), see
+/// `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("drafts in the composer");
+
+    isolated(|| {
+        let session = session();
+        let with_draft = add_chat(&session, ME);
+        set_draft(&session, ME, "half-written message");
+        add_user(&session, 42);
+        let without_draft = add_private_chat(&session, 42, 42, "Alice");
+
+        let bar: ChatActionBar = glib::Object::new();
+        let text = |bar: &ChatActionBar| {
+            bar.imp()
+                .message_entry
+                .formatted_text()
+                .map(|t| t.0.text)
+                .unwrap_or_default()
+        };
+
+        bar.set_property("chat", &with_draft);
+        assert_eq!(text(&bar), "half-written message");
+
+        bar.set_property("chat", &without_draft);
+        assert_eq!(text(&bar), "");
+    });
+}

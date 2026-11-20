@@ -418,3 +418,39 @@ pub(crate) fn video(caption: &str) -> enums::MessageContent {
         is_secret: false,
     })
 }
+
+pub(crate) fn live_location(live_period: i32) -> enums::MessageContent {
+    enums::MessageContent::MessageLiveLocation(types::MessageLiveLocation {
+        location: types::LiveLocation {
+            location: types::Location {
+                latitude: 52.37,
+                longitude: 4.89,
+                horizontal_accuracy: 0.0,
+            },
+            live_period,
+            heading: 0,
+            proximity_alert_radius: 0,
+        },
+        expires_in: live_period,
+    })
+}
+
+/// Sets the draft of a chat, as `updateChatDraftMessage` does.
+pub(crate) fn set_draft(session: &model::ClientStateSession, chat_id: ChatId, text: &str) {
+    session.handle_update(enums::Update::ChatDraftMessage(
+        types::UpdateChatDraftMessage {
+            chat_id,
+            draft_message: Some(types::DraftMessage {
+                reply_to: None,
+                date: DAY,
+                content: enums::DraftMessageContent::Text(types::DraftMessageContentText {
+                    text: formatted_text(text),
+                    link_preview_options: None,
+                }),
+                effect_id: 0,
+                suggested_post_info: None,
+            }),
+            positions: vec![],
+        },
+    ));
+}

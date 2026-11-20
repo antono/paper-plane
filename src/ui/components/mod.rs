@@ -31,3 +31,9 @@ pub(crate) use self::snow::Snow;
 pub(crate) use self::sticker::Sticker;
 pub(crate) use self::waveform::Waveform;
 pub(crate) use self::webm_animation::WebmAnimation;
+
+/// The checks of the components that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn sticker_gtk_check() {
+    sticker::gtk_check();
+}

@@ -363,3 +363,73 @@ impl Sticker {
         }
     }
 }
+
+/// Checks of WebM stickers in the sticker widget (6a1fc081) that need GTK,
+/// see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use crate::model::test_support::*;
+
+    eprintln!("WebM stickers in the sticker widget");
+
+    let fixture = |name: &str| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/ui/components/test-data")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let sticker = |id: i32, path: String, completed: bool| {
+        let mut sticker_file = file(id);
+        sticker_file.local.path = path;
+        sticker_file.local.is_downloading_completed = completed;
+        tdlib::types::Sticker {
+            id: id.into(),
+            set_id: 0,
+            width: 512,
+            height: 512,
+            emoji: "🙂".to_owned(),
+            format: tdlib::enums::StickerFormat::Webm,
+            full_type: tdlib::enums::StickerFullType::Regular(
+                tdlib::types::StickerFullTypeRegular {
+                    premium_animation: None,
+                },
+            ),
+            thumbnail: None,
+            sticker: sticker_file,
+        }
+    };
+
+    isolated(|| {
+        let session = session();
+        let context = glib::MainContext::ref_thread_default();
+        let iterate_until = |condition: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !condition() && Instant::now() < deadline {
+                context.iteration(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        // A downloaded WebM sticker is played by WebmAnimation (it used to
+        // hit unimplemented!()).
+        let widget: Sticker = glib::Object::new();
+        widget.update_sticker(
+            sticker(1, fixture("vp9-alpha.webm"), true),
+            true,
+            session.clone(),
+        );
+        iterate_until(&|| widget.first_child().is_some());
+        assert!(widget.first_child().and_downcast::<WebmAnimation>().is_some());
+
+        // A sticker that is not downloaded yet waits until it is shown
+        // (78359245): nothing is requested while the widget is not mapped.
+        let widget: Sticker = glib::Object::new();
+        widget.update_sticker(sticker(2, String::new(), false), true, session.clone());
+        assert!(widget.imp().pending_download.borrow().is_some());
+        assert!(widget.first_child().is_none());
+    });
+}
