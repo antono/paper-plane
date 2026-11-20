@@ -649,6 +649,7 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     label::gtk_check();
+    reactions_chooser::gtk_check();
 
     eprintln!("message label lookup for Copy Text");
 
