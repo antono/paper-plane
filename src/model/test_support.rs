@@ -274,7 +274,7 @@ pub(crate) fn text(text: &str) -> enums::MessageContent {
     })
 }
 
-fn file(id: i32) -> types::File {
+pub(crate) fn file(id: i32) -> types::File {
     types::File {
         id,
         size: 1000,
@@ -392,4 +392,29 @@ pub(crate) fn delete_messages(
         is_permanent: true,
         from_cache: false,
     }));
+}
+
+pub(crate) fn video(caption: &str) -> enums::MessageContent {
+    enums::MessageContent::MessageVideo(types::MessageVideo {
+        video: types::Video {
+            duration: 137,
+            width: 640,
+            height: 360,
+            file_name: "clip.mp4".to_owned(),
+            mime_type: "video/mp4".to_owned(),
+            has_stickers: false,
+            supports_streaming: true,
+            minithumbnail: None,
+            thumbnail: None,
+            video: file(2),
+        },
+        alternative_videos: vec![],
+        storyboards: vec![],
+        cover: None,
+        start_timestamp: 0,
+        caption: formatted_text(caption),
+        show_caption_above_media: false,
+        has_spoiler: false,
+        is_secret: false,
+    })
 }

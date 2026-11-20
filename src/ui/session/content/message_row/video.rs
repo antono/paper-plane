@@ -165,3 +165,26 @@ impl MessageVideo {
         }
     }
 }
+
+/// Checks of video messages that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("video messages");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let first = model::Message::new(&chat, message(ME, 1, DAY, 0, video("first clip")));
+        let second = model::Message::new(&chat, message(ME, 2, DAY, 0, video("second clip")));
+
+        // Videos are shown as videos again (they fell back to text upstream),
+        // with their caption, and a row can be reused for another video.
+        let row: MessageVideo = glib::Object::new();
+        row.set_message(&first);
+        assert_eq!(row.imp().message_bubble.label_text(), "first clip");
+        row.set_message(&second);
+        assert_eq!(row.imp().message_bubble.label_text(), "second clip");
+    });
+}

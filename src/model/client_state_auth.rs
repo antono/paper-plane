@@ -165,6 +165,19 @@ mod tests {
                 }),
             );
             assert_eq!(state_name(&auth), "ClientStateAuthPhoneNumber");
+
+            update(
+                &auth,
+                AuthorizationState::WaitPremiumPurchase(
+                    types::AuthorizationStateWaitPremiumPurchase {
+                        store_product_id: String::new(),
+                        premium_day_count: 30,
+                        support_email_address: String::new(),
+                        support_email_subject: String::new(),
+                    },
+                ),
+            );
+            assert_eq!(state_name(&auth), "ClientStateAuthPhoneNumber");
         });
     }
 }

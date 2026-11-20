@@ -247,6 +247,12 @@ impl MessageBubble {
         self.imp().prefix_bin.set_child(prefix);
     }
 
+    /// The text of the message label, for tests.
+    #[cfg(test)]
+    pub(crate) fn label_text(&self) -> String {
+        self.imp().message_label.label()
+    }
+
     pub(crate) fn set_label(&self, label: String) {
         let imp = self.imp();
 
