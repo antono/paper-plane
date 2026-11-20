@@ -146,12 +146,17 @@ impl ChatList {
             #[weak(rename_to = obj)]
             self,
             async move {
-                let result = tdlib::functions::load_chats(
-                    Some(obj.list_type().0),
-                    20,
-                    obj.session_().client_().id(),
-                )
-                .await;
+                // The chats are loaded page by page, and the session can be
+                // gone before the last page (quitting, logging out).
+                let Some(client_id) = obj
+                    .session()
+                    .and_then(|session| session.client())
+                    .map(|client| client.id())
+                else {
+                    return;
+                };
+                let result =
+                    tdlib::functions::load_chats(Some(obj.list_type().0), 20, client_id).await;
 
                 if let Err(err) = result {
                     // Error 404 means that all chats have been loaded
