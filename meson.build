@@ -10,10 +10,12 @@ gnome = import('gnome')
 
 base_id = 'app.drey.PaperPlane'
 
-dependency('glib-2.0', version: '>= 2.72')
-dependency('gio-2.0', version: '>= 2.72')
-dependency('gtk4', version: '>= 4.12')
-dependency('libadwaita-1', version: '>= 1.4')
+# The minimums of the features of the Rust bindings in Cargo.toml (gtk4-rs
+# gnome_47, libadwaita-rs v1_6), checked by build-aux/check-packaging.py
+dependency('glib-2.0', version: '>= 2.82')
+dependency('gio-2.0', version: '>= 2.82')
+dependency('gtk4', version: '>= 4.16')
+dependency('libadwaita-1', version: '>= 1.6')
 dependency('shumate-1.0', version: '>= 1')
 dependency('tdjson', version: '>= 1.8.65')
 

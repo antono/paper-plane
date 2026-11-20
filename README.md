@@ -97,7 +97,8 @@ The following packages are required to build Paper Plane:
 - cargo
 - blueprint-compiler
 - GTK >= 4.16
-- libadwaita >= 1.4
+- libadwaita >= 1.6
+- GLib >= 2.82
 - libshumate >= 1.0.0
 - libvpx (development headers)
 - rlottie >= 0.2
