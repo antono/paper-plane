@@ -337,6 +337,19 @@ impl Chat {
         self.session().unwrap()
     }
 
+    /// The id of the TDLib client of this chat, or an error if its session is
+    /// gone. Requests of a history that is still loading can outlive the
+    /// session, e.g. while the application quits.
+    fn client_id(&self) -> Result<crate::types::ClientId, tdlib::types::Error> {
+        self.session()
+            .and_then(|session| session.client())
+            .map(|client| client.id())
+            .ok_or_else(|| tdlib::types::Error {
+                code: 500,
+                message: "The session of the chat is closed".to_owned(),
+            })
+    }
+
     /// The chat history model that currently displays this chat, if any.
     ///
     /// The chat only holds a weak reference to the model, so it stays alive
@@ -556,8 +569,10 @@ impl Chat {
             return Ok(message);
         }
 
-        let client_id = self.session_().client_().id();
+        let client_id = self.client_id()?;
         let result = tdlib::functions::get_message(self.id(), id, client_id).await;
+        // The session may have gone while waiting for the answer.
+        self.client_id()?;
 
         result.map(|r| {
             let tdlib::enums::Message::Message(message) = r;
@@ -630,10 +645,12 @@ impl Chat {
         offset: i32,
         limit: i32,
     ) -> Result<Vec<model::Message>, tdlib::types::Error> {
-        let client_id = self.session_().client_().id();
+        let client_id = self.client_id()?;
         let result =
             tdlib::functions::get_chat_history(self.id(), from_id, offset, limit, false, client_id)
                 .await;
+        // The session may have gone while waiting for the answer.
+        self.client_id()?;
 
         let tdlib::enums::Messages::Messages(data) = result?;
 
@@ -655,7 +672,7 @@ impl Chat {
         from_id: MessageId,
         limit: i32,
     ) -> Result<MediaSearchPage, tdlib::types::Error> {
-        let client_id = self.session_().client_().id();
+        let client_id = self.client_id()?;
         let result = tdlib::functions::search_chat_messages(
             self.id(),
             None,
@@ -708,5 +725,29 @@ impl Chat {
             self.session_().client_().id(),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    /// Requests of a chat whose session is gone fail instead of panicking.
+    #[test]
+    fn requests_after_the_session_is_gone_fail() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+            drop(session);
+            assert!(chat.session().is_none());
+
+            let context = glib::MainContext::ref_thread_default();
+            let error = context
+                .block_on(chat.get_chat_history(0, 0, 10))
+                .unwrap_err();
+            assert_eq!(error.code, 500);
+            assert!(context.block_on(chat.fetch_message(1)).is_err());
+        });
     }
 }
