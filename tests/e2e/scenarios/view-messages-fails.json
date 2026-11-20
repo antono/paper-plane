@@ -1,0 +1,53 @@
+{
+  "auth": "ready",
+  "me": {
+    "id": 137,
+    "name": "Test User"
+  },
+  "chats": [
+    {
+      "with": {
+        "id": 1001,
+        "name": "Alice Example"
+      },
+      "unread": 1,
+      "messages": [
+        {
+          "id": 1,
+          "text": "Hi, this is Alice",
+          "ago": 7200
+        },
+        {
+          "id": 2,
+          "outgoing": true,
+          "text": "Hello Alice",
+          "ago": 3600
+        },
+        {
+          "id": 3,
+          "text": "Did the end-to-end test pass?",
+          "ago": 60
+        }
+      ]
+    },
+    {
+      "with": {
+        "id": 1002,
+        "name": "Bob Example"
+      },
+      "messages": [
+        {
+          "id": 1,
+          "text": "Bob says hello",
+          "ago": 86400
+        }
+      ]
+    }
+  ],
+  "fail": {
+    "viewMessages": {
+      "code": 500,
+      "message": "Internal Server Error (injected by the test)"
+    }
+  }
+}

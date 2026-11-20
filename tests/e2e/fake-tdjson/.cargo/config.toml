@@ -1,0 +1,4 @@
+# The schema of the TDLib the application is built against (tdlib-rs/tl/).
+# Relative to tdlib-rs, where its build script runs.
+[env]
+TDLIB_RS_TL_FILE = "tl/api_1.8.65.tl"
