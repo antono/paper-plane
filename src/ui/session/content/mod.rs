@@ -4,6 +4,8 @@ mod chat_history;
 mod chat_history_row;
 mod chat_info_window;
 mod event_row;
+mod media_viewer;
+mod media_viewer_page;
 mod message_row;
 mod send_media_window;
 
@@ -20,7 +22,15 @@ pub(crate) use self::chat_history::ChatHistory;
 pub(crate) use self::chat_history_row::ChatHistoryRow;
 pub(crate) use self::chat_info_window::ChatInfoWindow;
 pub(crate) use self::event_row::EventRow;
+pub(crate) use self::media_viewer::MediaViewer;
+pub(crate) use self::media_viewer::ViewerEntry;
+pub(crate) use self::media_viewer::ViewerItem;
+pub(crate) use self::message_row::MediaAlbumGrid;
+pub(crate) use self::message_row::MediaDownloadButton;
+pub(crate) use self::message_row::MediaPhotoTile;
 pub(crate) use self::message_row::MediaPicture;
+pub(crate) use self::message_row::MediaThumbnail;
+pub(crate) use self::message_row::MediaVideoTile;
 pub(crate) use self::message_row::MessageBase;
 pub(crate) use self::message_row::MessageBaseExt;
 pub(crate) use self::message_row::MessageBaseImpl;
@@ -30,12 +40,16 @@ pub(crate) use self::message_row::MessageDocumentStatusIndicator;
 pub(crate) use self::message_row::MessageIndicators;
 pub(crate) use self::message_row::MessageLabel;
 pub(crate) use self::message_row::MessageLocation;
+pub(crate) use self::message_row::MessageMediaAlbum;
 pub(crate) use self::message_row::MessagePhoto;
+pub(crate) use self::message_row::MessageReactions;
 pub(crate) use self::message_row::MessageReply;
 pub(crate) use self::message_row::MessageSticker;
 pub(crate) use self::message_row::MessageText;
 pub(crate) use self::message_row::MessageVenue;
 pub(crate) use self::message_row::MessageVideo;
+pub(crate) use self::message_row::MessageVoiceNote;
+pub(crate) use self::message_row::ReactionsChooser;
 pub(crate) use self::message_row::Row as MessageRow;
 pub(crate) use self::send_media_window::SendMediaWindow;
 use crate::model;
@@ -128,6 +142,10 @@ impl Content {
 
     pub(crate) fn chat(&self) -> Option<model::Chat> {
         self.imp().chat.upgrade()
+    }
+
+    pub(crate) fn set_chat_open(&self, open: bool) {
+        self.imp().chat_history.set_chat_open(open);
     }
 
     fn set_chat(&self, chat: Option<&model::Chat>) {

@@ -59,6 +59,20 @@ pub(crate) fn freplace(s: String, args: &[(&str, &str)]) -> String {
     s
 }
 
+/// Forces emoji presentation for the given emoji by appending the variation
+/// selector-16 (U+FE0F) if the emoji doesn't already have an explicit
+/// presentation.
+///
+/// Some emoji like ❤ (U+2764) default to text presentation and would otherwise
+/// be rendered as monochrome glyphs by Pango.
+pub(crate) fn emoji_string(emoji: &str) -> String {
+    if emoji.contains('\u{FE0E}') || emoji.contains('\u{FE0F}') {
+        emoji.to_string()
+    } else {
+        format!("{emoji}\u{FE0F}")
+    }
+}
+
 pub(crate) fn linkify(text: &str) -> String {
     if !protocol_re().is_match(text) {
         format!("http://{text}")
@@ -252,6 +266,40 @@ pub(crate) fn decode_image_from_path(path: &str) -> Result<gdk::MemoryTexture, D
     );
 
     Ok(texture)
+}
+
+/// Returns a texture for the given minithumbnail, or `None` if it could not
+/// be decoded.
+pub(crate) fn texture_from_minithumbnail(
+    minithumbnail: &tdlib::types::Minithumbnail,
+) -> Option<gdk::Texture> {
+    gdk::Texture::from_bytes(&glib::Bytes::from_owned(glib::base64_decode(
+        &minithumbnail.data,
+    )))
+    .ok()
+}
+
+/// Returns the photo size that should be loaded for the given scale factor.
+///
+/// See https://core.telegram.org/api/files#image-thumbnail-types for more
+/// information about photo sizes.
+pub(crate) fn photo_size_for_scale_factor(
+    sizes: &[tdlib::types::PhotoSize],
+    scale_factor: i32,
+) -> Option<tdlib::types::PhotoSize> {
+    let last = || sizes.last().cloned();
+
+    if scale_factor > 2 {
+        return last();
+    }
+
+    let type_ = if scale_factor > 1 { "y" } else { "x" };
+
+    sizes
+        .iter()
+        .find(|s| s.r#type == type_)
+        .cloned()
+        .or_else(last)
 }
 
 pub(crate) fn show_toast<W: IsA<gtk::Widget>>(widget: &W, title: impl Into<glib::GString>) {

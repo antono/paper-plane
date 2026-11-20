@@ -18,6 +18,15 @@ use crate::model;
 use crate::ui;
 use crate::utils;
 
+/// The number of messages requested when the viewport is first filled with
+/// messages. If it is not enough, smaller chunks are requested until it is.
+const INITIAL_LOAD_LIMIT: i32 = 30;
+
+/// The delay, in milliseconds, before the viewed messages are sent to TDLib.
+/// Messages are accumulated in the meantime, so that scrolling doesn't issue
+/// a TDLib request on every change of the visible messages.
+const VIEW_MESSAGES_DELAY_MS: u64 = 150;
+
 mod imp {
     use super::*;
 
@@ -33,6 +42,7 @@ mod imp {
         pub(super) sticky: Cell<bool>,
         pub(super) viewed_message_ids: RefCell<HashSet<i64>>,
         pub(super) viewed_message_ids_changed: Cell<bool>,
+        pub(super) view_messages_scheduled: Cell<bool>,
         pub(super) is_secret_chat: Cell<bool>,
         #[template_child]
         pub(super) window_title: TemplateChild<adw::WindowTitle>,
@@ -59,7 +69,7 @@ mod imp {
                 widget.open_info_dialog();
             });
             klass.install_action("chat-history.scroll-down", None, move |widget, _, _| {
-                widget.scroll_down();
+                widget.handle_scroll_down();
             });
             klass.install_action(
                 "chat-history.reply",
@@ -75,6 +85,14 @@ mod imp {
                 move |widget, _, variant| {
                     let message_id = variant.and_then(|v| v.get()).unwrap();
                     widget.imp().chat_action_bar.edit_message_id(message_id);
+                },
+            );
+            klass.install_action(
+                "chat-history.jump-to-message",
+                Some(glib::VariantTy::INT64),
+                move |widget, _, variant| {
+                    let message_id = variant.and_then(|v| v.get()).unwrap();
+                    widget.jump_to_message(message_id);
                 },
             );
             klass.install_action_async(
@@ -118,7 +136,6 @@ mod imp {
                     obj.set_chat(chat);
                 }
                 "sticky" => obj.set_sticky(value.get().unwrap()),
-                "is_secret_chat" => obj.set_is_secret_chat(value.get().unwrap()),
                 _ => unimplemented!(),
             }
         }
@@ -146,7 +163,7 @@ mod imp {
                 #[weak]
                 obj,
                 move |adj| {
-                    obj.view_messages();
+                    obj.schedule_view_messages();
 
                     let imp = obj.imp();
 
@@ -159,10 +176,57 @@ mod imp {
                             imp.is_auto_scrolling.set(false);
                             obj.set_sticky(true);
                         }
-                    } else {
-                        obj.set_sticky(adj.value() + adj.page_size() >= adj.upper());
-                        obj.load_older_messages_if_needed();
+                } else {
+                    obj.set_sticky(adj.value() + adj.page_size() >= adj.upper());
+
+                    // The list is reversed: a small value means that the oldest
+                    // loaded message is visible, while a value close to the upper
+                    // limit means that the newest loaded message is visible.
+                    let near_oldest = adj.value() < adj.page_size() * 2.0
+                        || adj.upper() <= adj.page_size() * 2.0;
+                    let near_newest = adj.upper() > adj.page_size() * 2.0
+                        && adj.value() + adj.page_size() * 2.0 >= adj.upper();
+
+                    log::debug!(
+                        "Scrolled (near_oldest = {near_oldest}, near_newest = {near_newest}, adj.value = {}, adj.upper = {}, adj.page_size = {})",
+                        adj.value(),
+                        adj.upper(),
+                        adj.page_size(),
+                    );
+
+                    if !near_oldest && !near_newest {
+                        return;
                     }
+
+                    if let Some(model) = imp.model.borrow().as_ref() {
+                        imp.is_loading_messages.set(true);
+
+                        utils::spawn(clone!(
+                            #[weak]
+                            obj,
+                            #[weak]
+                            model,
+                            async move {
+                                let result = if near_oldest {
+                                    log::debug!("Loading older messages on scroll (limit = 30)");
+                                    model.load_older_messages(30).await
+                                } else {
+                                    log::debug!("Loading newer messages on scroll (limit = 50)");
+                                    model.load_newer_messages(50).await
+                                };
+
+                                obj.imp().is_loading_messages.set(false);
+
+                                if let Err(model::ChatHistoryError::AlreadyLoading) = result {
+                                    log::debug!("Scroll-triggered load already in flight");
+                                }
+                                if let Err(model::ChatHistoryError::Tdlib(e)) = result {
+                                    log::warn!("Couldn't load more chat messages: {:?}", e);
+                                }
+                            }
+                        ));
+                    }
+                }
                 }
             ));
 
@@ -173,10 +237,6 @@ mod imp {
                     if obj.sticky() || obj.imp().is_auto_scrolling.get() {
                         obj.scroll_down();
                     }
-
-                    // Older messages are added above the visible ones, so keep
-                    // loading them until there is enough history to scroll up.
-                    obj.load_older_messages_if_needed();
                 }
             ));
         }
@@ -334,6 +394,18 @@ impl ChatHistory {
         self.imp().chat.upgrade()
     }
 
+    /// Opens or closes the chat in TDLib. While a chat is opened in TDLib,
+    /// no notifications are created for it.
+    pub(crate) fn set_chat_open(&self, open: bool) {
+        if let Some(chat) = self.chat() {
+            if open {
+                perform_chat_action(&chat, tdlib::functions::open_chat);
+            } else {
+                perform_chat_action(&chat, tdlib::functions::close_chat);
+            }
+        }
+    }
+
     pub(crate) fn set_chat(&self, chat: Option<&model::Chat>) {
         let old_chat = self.chat();
         if chat == old_chat.as_ref() {
@@ -348,15 +420,18 @@ impl ChatHistory {
         }
 
         if let Some(chat) = chat {
-            match chat.chat_type() {
-                model::ChatType::Secret(_) => {
-                    self.set_is_secret_chat(true);
-                }
-                _ => {
-                    self.set_is_secret_chat(false);
-                }
-            }
+            self.set_is_secret_chat(matches!(chat.chat_type(), model::ChatType::Secret(_)));
 
+            log::debug!(
+                "Opening chat {} (unread_count = {}, anchor = {})",
+                chat.id(),
+                chat.unread_count(),
+                if chat.unread_count() > 0 {
+                    chat.last_read_inbox_message_id()
+                } else {
+                    0
+                },
+            );
             self.action_set_enabled(
                 "chat-history.leave-chat",
                 match chat.chat_type() {
@@ -372,54 +447,6 @@ impl ChatHistory {
 
             let model = model::ChatHistoryModel::new(chat);
 
-            // Request sponsored message, if needed
-            let list_view_model: gio::ListModel = if matches!(chat.chat_type(), model::ChatType::Supergroup(supergroup) if supergroup.is_channel())
-            {
-                let list = gio::ListStore::new::<gio::ListModel>();
-
-                // We need to create a list here so that we can append the sponsored message
-                // to the chat history in the GtkListView using a GtkFlattenListModel
-                let sponsored_message_list = gio::ListStore::new::<model::SponsoredMessage>();
-                list.append(&sponsored_message_list);
-                self.request_sponsored_message(chat, &sponsored_message_list);
-
-                list.append(&model);
-
-                gtk::FlattenListModel::new(Some(list)).upcast()
-            } else {
-                model.clone().upcast()
-            };
-
-            utils::spawn(clone!(
-                #[weak(rename_to = obj)]
-                self,
-                #[weak]
-                model,
-                async move {
-                    let imp = obj.imp();
-
-                    imp.is_loading_messages.set(true);
-
-                    let scrollbar = imp.scrolled_window.vscrollbar();
-                    scrollbar.set_visible(false);
-
-                    if let Err(model::ChatHistoryError::Tdlib(e)) =
-                        model.load_older_messages(2).await
-                    {
-                        log::warn!("Couldn't load initial history messages: {:?}", e);
-                    }
-
-                    scrollbar.set_visible(true);
-
-                    imp.is_loading_messages.set(false);
-                    obj.set_sticky(true);
-                    obj.scroll_down();
-                    obj.load_older_messages_if_needed();
-
-                    obj.view_messages();
-                }
-            ));
-
             let handler = chat.connect_new_message(clone!(
                 #[weak(rename_to = obj)]
                 self,
@@ -431,19 +458,227 @@ impl ChatHistory {
             ));
             imp.chat_handler.replace(Some(handler));
 
-            // The model keeps the newest message first, the list view shows
-            // the newest message at the bottom.
-            let list_view_model = model::ReversedListModel::new(&list_view_model);
-            let selection = gtk::NoSelection::new(Some(list_view_model));
-            imp.list_view.set_model(Some(&selection));
-
-            imp.model.replace(Some(model));
+            self.set_history_model(chat, &model);
 
             perform_chat_action(chat, tdlib::functions::open_chat);
         }
 
         imp.chat.set(chat);
         self.notify("chat");
+    }
+
+    /// Creates the model shown by the list view, which wraps the chat history
+    /// together with the sponsored messages, if needed.
+    fn create_list_model(
+        &self,
+        chat: &model::Chat,
+        model: &model::ChatHistoryModel,
+    ) -> gio::ListModel {
+        if matches!(chat.chat_type(), model::ChatType::Supergroup(supergroup) if supergroup.is_channel())
+        {
+            let list = gio::ListStore::new::<gio::ListModel>();
+
+            // We need to create a list here so that we can append the sponsored message
+            // to the chat history in the GtkListView using a GtkFlattenListModel
+            let sponsored_message_list = gio::ListStore::new::<model::SponsoredMessage>();
+            list.append(&sponsored_message_list);
+            self.request_sponsored_message(chat, &sponsored_message_list);
+
+            list.append(model);
+
+            gtk::FlattenListModel::new(Some(list)).upcast()
+        } else {
+            model.clone().upcast()
+        }
+    }
+
+    /// The number of sponsored messages shown before the chat history in the
+    /// list view.
+    fn sponsored_message_count(&self) -> u32 {
+        let imp = self.imp();
+
+        let Some(list_model) = imp.list_view.model() else {
+            return 0;
+        };
+
+        let history_count = imp.model.borrow().as_ref().map_or(0, |m| m.n_items());
+
+        list_model.n_items().saturating_sub(history_count)
+    }
+
+    /// Loads a window of messages around the anchor of the chat history and
+    /// scrolls the list view to it.
+    async fn load_around_anchor(&self, model: &model::ChatHistoryModel) {
+        let imp = self.imp();
+
+        let anchor = model.anchor();
+
+        if let Err(e) = model.load_around_anchor().await {
+            log::warn!("Couldn't load the messages around the anchor: {}", e);
+            return;
+        }
+
+        let Some(mut position) = model.find_message_position(anchor) else {
+            return;
+        };
+
+        // Show the unread messages below the anchor instead of the anchor itself
+        if model.is_unread_anchor() {
+            let unread_count = self
+                .chat()
+                .map(|chat| chat.unread_count())
+                .unwrap_or_default();
+            position = position.saturating_sub(unread_count as u32);
+        }
+
+        position += self.sponsored_message_count();
+
+        // The list view shows the history in reverse order (newest at the bottom)
+        let n_items = imp.list_view.model().map_or(0, |m| m.n_items());
+        let position = n_items.saturating_sub(1).saturating_sub(position);
+
+        imp.list_view
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+    }
+
+    /// Installs the chat history model in the list view and fills it
+    /// asynchronously.
+    ///
+    /// If the model is anchored at the newest message, the history is filled
+    /// from the newest end until the viewport can scroll, e.g. when opening
+    /// a chat without unread messages or jumping to its newest message.
+    /// Otherwise, a window of messages is loaded around the anchor and the
+    /// viewport is positioned at it, e.g. when opening a chat with unread
+    /// messages or jumping to a specific message.
+    fn set_history_model(&self, chat: &model::Chat, model: &model::ChatHistoryModel) {
+        let imp = self.imp();
+
+        // Claim the loading flag synchronously, so that the scroll handler
+        // can't start a concurrent load before the initial fill below had
+        // a chance to run.
+        imp.is_loading_messages.set(true);
+
+        let list_view_model = self.create_list_model(chat, model);
+
+        // The model keeps the newest message first, the list view shows the
+        // newest message at the bottom.
+        let list_view_model = model::ReversedListModel::new(&list_view_model);
+        let selection = gtk::NoSelection::new(Some(list_view_model));
+        imp.list_view.set_model(Some(&selection));
+
+        imp.model.replace(Some(model.clone()));
+
+        let widget = self.clone();
+        let model_weak = model.downgrade();
+
+        utils::spawn(clone!(
+            #[strong(rename_to = obj)]
+            widget,
+            #[strong]
+            model_weak,
+            async move {
+                let imp = obj.imp();
+
+                log::debug!(
+                    "Filling chat history (at_newest = {}, is_unread_anchor = {})",
+                    model_weak.upgrade().map(|m| m.at_newest()).unwrap_or(false),
+                    model_weak
+                        .upgrade()
+                        .map(|m| m.is_unread_anchor())
+                        .unwrap_or(false),
+                );
+
+                let scrollbar = imp.scrolled_window.vscrollbar();
+                scrollbar.set_visible(false);
+
+                let adj = imp.list_view.vadjustment().unwrap();
+                adj.set_value(0.0);
+
+                if obj.chat().is_some() {
+                    if let Some(model) = model_weak.upgrade() {
+                        if model.at_newest() {
+                            // Fill the viewport with messages, using
+                            // progressively smaller chunks, so that the first
+                            // paint happens after a single TDLib request
+                            let mut limit = INITIAL_LOAD_LIMIT;
+
+                            while adj.value() == 0.0 {
+                                let adj_value = adj.value();
+                                let adj_upper = adj.upper();
+                                let adj_page_size = adj.page_size();
+                                match model.load_older_messages(limit).await {
+                                    Ok(true) => {
+                                        log::debug!(
+                                            "Loaded older messages (limit = {limit}, remaining = true, adj.value = {adj_value}, adj.upper = {adj_upper}, adj.page_size = {adj_page_size})"
+                                        );
+                                        limit = (limit / 2).max(2);
+                                    }
+                                    Ok(false) => {
+                                        log::debug!(
+                                            "No more older messages (limit = {limit}, adj.value = {adj_value}, adj.upper = {adj_upper}, adj.page_size = {adj_page_size})"
+                                        );
+                                        break;
+                                    }
+                                    Err(model::ChatHistoryError::AlreadyLoading) => {
+                                        // Another load is in flight. Try again
+                                        // after giving it a chance to finish.
+                                        log::debug!(
+                                            "load_older_messages already in flight (limit = {limit}), retrying"
+                                        );
+                                        glib::timeout_future(std::time::Duration::from_millis(20))
+                                            .await;
+                                    }
+                                    Err(model::ChatHistoryError::Tdlib(e)) => {
+                                        log::warn!("Couldn't load initial history messages: {e:?}");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            log::debug!(
+                                "Setting sticky (adj.value = {}, adj.upper = {}, adj.page_size = {}, n_items = {})",
+                                adj.value(),
+                                adj.upper(),
+                                adj.page_size(),
+                                model.n_items(),
+                            );
+                            obj.set_sticky(true);
+                        } else {
+                            log::debug!("Loading messages around the anchor");
+                            obj.load_around_anchor(&model).await;
+
+                            log::debug!("Anchor window loaded (n_items = {})", model.n_items(),);
+
+                            obj.set_sticky(false);
+                        }
+                    }
+                }
+
+                log::debug!(
+                    "Chat history fill done (n_items = {}), showing scrollbar",
+                    model_weak.upgrade().map(|m| m.n_items()).unwrap_or(0),
+                );
+                scrollbar.set_visible(true);
+
+                imp.is_loading_messages.set(false);
+
+                if obj.chat().is_some() {
+                    obj.view_messages();
+                }
+            }
+        ));
+    }
+
+    /// Shows the message with the specified id in the chat history, loading
+    /// the messages around it instead of the whole history in between.
+    fn jump_to_message(&self, message_id: i64) {
+        let Some(chat) = self.chat() else {
+            return;
+        };
+
+        let model = model::ChatHistoryModel::new_for_message(&chat, message_id);
+
+        self.set_history_model(&chat, &model);
     }
 
     pub(crate) fn sticky(&self) -> bool {
@@ -472,35 +707,6 @@ impl ChatHistory {
         self.notify("is-secret-chat");
     }
 
-    /// Loads older messages when the view is less than two pages away from the
-    /// top of the history.
-    ///
-    /// Does nothing while the initial messages of the chat are loading.
-    fn load_older_messages_if_needed(&self) {
-        let imp = self.imp();
-
-        if imp.is_loading_messages.get() {
-            return;
-        }
-
-        let adj = imp.list_view.vadjustment().unwrap();
-        if adj.value() >= adj.page_size() * 2.0 && adj.upper() > adj.page_size() * 2.0 {
-            return;
-        }
-
-        let Some(model) = imp.model.borrow().clone() else {
-            return;
-        };
-
-        // The model refuses to load while it is already loading, and the
-        // messages it adds change the upper bound, which calls this again.
-        utils::spawn(async move {
-            if let Err(model::ChatHistoryError::Tdlib(e)) = model.load_older_messages(2).await {
-                log::warn!("Couldn't load more chat messages: {:?}", e);
-            }
-        });
-    }
-
     fn scroll_down(&self) {
         let imp = self.imp();
 
@@ -508,6 +714,86 @@ impl ChatHistory {
 
         imp.scrolled_window
             .emit_by_name::<bool>("scroll-child", &[&gtk::ScrollType::End, &false]);
+    }
+
+    /// Handles the scroll-down button press.
+    ///
+    /// If the chat has unread messages that are not in the loaded history
+    /// window, jumps to the first unread message. If the newest messages are
+    /// not loaded anymore, e.g. after jumping to an old message, re-opens
+    /// the history at the newest message. Otherwise, plain scrolling to the
+    /// bottom is used.
+    fn handle_scroll_down(&self) {
+        let Some(chat) = self.chat() else {
+            self.scroll_down();
+            return;
+        };
+
+        let Some(model) = self.imp().model.borrow().as_ref().cloned() else {
+            self.scroll_down();
+            return;
+        };
+
+        // The history is anchored at the last read message when there are
+        // unread messages. A chat that was never read has no such anchor and
+        // jumping to the newest message is used instead.
+        if chat.unread_count() > 0 && chat.last_read_inbox_message_id() != 0 && !model.at_newest() {
+            self.jump_to_first_unread();
+        } else if !model.at_newest() {
+            self.go_to_newest();
+        } else {
+            self.scroll_down();
+        }
+    }
+
+    /// Re-anchors the history at the first unread message and positions the
+    /// viewport at it. This is similar to opening the chat with unread
+    /// messages, so that the unread block is shown instead of reloading
+    /// newer messages one chunk at a time.
+    fn jump_to_first_unread(&self) {
+        let Some(chat) = self.chat() else {
+            return;
+        };
+
+        let model = model::ChatHistoryModel::new(&chat);
+
+        self.set_history_model(&chat, &model);
+    }
+
+    /// Re-opens the history at the newest message of the chat, discarding
+    /// the currently loaded window. Used when the newest messages are not
+    /// loaded anymore, e.g. after jumping to an old message.
+    fn go_to_newest(&self) {
+        let Some(chat) = self.chat() else {
+            return;
+        };
+
+        let model = model::ChatHistoryModel::new(&chat);
+
+        self.set_history_model(&chat, &model);
+    }
+
+    /// Schedules a flush of the viewed messages with a short delay, so that
+    /// at most one `viewMessages` request is sent per delay interval.
+    pub(crate) fn schedule_view_messages(&self) {
+        let imp = self.imp();
+
+        if imp.view_messages_scheduled.get() {
+            return;
+        }
+        imp.view_messages_scheduled.set(true);
+
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                glib::timeout_future(std::time::Duration::from_millis(VIEW_MESSAGES_DELAY_MS))
+                    .await;
+
+                obj.imp().view_messages_scheduled.set(false);
+                obj.view_messages();
+            }
+        ));
     }
 
     pub(crate) fn view_messages(&self) {
@@ -521,6 +807,11 @@ impl ChatHistory {
             let client_id = chat.session_().client_().id();
             let viewed_message_ids =
                 Vec::from_iter(imp.viewed_message_ids.borrow().iter().copied());
+
+            log::debug!(
+                "Reporting {count} viewed messages to TDLib (chat_id = {chat_id})",
+                count = viewed_message_ids.len(),
+            );
 
             utils::spawn(async move {
                 tdlib::functions::view_messages(chat_id, viewed_message_ids, None, true, client_id)

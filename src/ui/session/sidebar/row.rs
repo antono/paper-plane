@@ -676,9 +676,18 @@ fn sender_label(message: model::Message) -> Option<String> {
 
     // Just use a sender label for specific messages.
     match message.content().0 {
-        MessageText(_) | MessageLocation(_) | MessageLiveLocation(_) | MessageSticker(_) | MessagePhoto(_)
-        | MessageAudio(_) | MessageAnimation(_) | MessageVideo(_) | MessageDocument(_)
-        | MessageVoiceNote(_) | MessageCall(_) | MessageVenue(_) => {}
+        MessageText(_)
+        | MessageLocation(_)
+        | MessageLiveLocation(_)
+        | MessageSticker(_)
+        | MessagePhoto(_)
+        | MessageAudio(_)
+        | MessageAnimation(_)
+        | MessageVideo(_)
+        | MessageDocument(_)
+        | MessageVoiceNote(_)
+        | MessageCall(_)
+        | MessageVenue(_) => {}
         _ => return None,
     }
 
@@ -695,9 +704,7 @@ fn sender_label(message: model::Message) -> Option<String> {
                     }
                     model::MessageForwardOrigin::Chat { chat, .. }
                     | model::MessageForwardOrigin::Channel { chat, .. } => chat.title(),
-                    model::MessageForwardOrigin::HiddenUser { sender_name } => {
-                        sender_name.clone()
-                    }
+                    model::MessageForwardOrigin::HiddenUser { sender_name } => sender_name.clone(),
                 })
         }
     } else {

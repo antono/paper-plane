@@ -34,6 +34,7 @@ else
   message('Building in debug mode')
 endif
 
+
 cargo_env = [ 'CARGO_HOME=' + meson.project_build_root() / 'cargo-home' ]
 
 custom_target(
@@ -72,7 +73,8 @@ test (
   ],
   env: [
     'CARGO_HOME=@0@'.format(cargo_home),
-    'PATH=/app/bin:/usr/bin:/usr/lib/sdk/llvm18/bin:/usr/lib/sdk/rust-stable/bin',
+    'LIBCLANG_PATH=/usr/lib/sdk/llvm20/lib',
+    'PATH=/app/bin:/usr/bin:/usr/lib/sdk/rust-stable/bin',
   ],
   timeout: 300, # Give cargo more time
 )

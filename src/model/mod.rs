@@ -20,6 +20,8 @@ mod client_state_logging_out;
 mod client_state_session;
 mod country_info;
 mod country_list;
+mod media_album;
+mod media_manager;
 mod message;
 mod message_forward_info;
 mod message_interaction_info;
@@ -52,6 +54,7 @@ pub(crate) use self::avatar::Avatar;
 pub(crate) use self::basic_group::BasicGroup;
 pub(crate) use self::chat::Chat;
 pub(crate) use self::chat::ChatType;
+pub(crate) use self::chat::MediaSearchPage;
 pub(crate) use self::chat_action::ChatAction;
 pub(crate) use self::chat_action_list::ChatActionList;
 pub(crate) use self::chat_folder_list::ChatFolderList;
@@ -76,10 +79,14 @@ pub(crate) use self::client_state_logging_out::ClientStateLoggingOut;
 pub(crate) use self::client_state_session::ClientStateSession;
 pub(crate) use self::country_info::CountryInfo;
 pub(crate) use self::country_list::CountryList;
+pub(crate) use self::media_album::MediaAlbum;
+pub(crate) use self::media_manager::MediaManager;
+pub(crate) use self::media_manager::MediaType;
 pub(crate) use self::message::Message;
 pub(crate) use self::message::MessageSender;
 pub(crate) use self::message_forward_info::MessageForwardInfo;
 pub(crate) use self::message_forward_info::MessageForwardOrigin;
+pub(crate) use self::message_interaction_info::BoxedMessageReactions;
 pub(crate) use self::message_interaction_info::MessageInteractionInfo;
 pub(crate) use self::reversed_list_model::ReversedListModel;
 pub(crate) use self::secret_chat::SecretChat;
@@ -140,9 +147,11 @@ pub(crate) struct BoxedDatabaseInfo(pub(crate) DatabaseInfo);
 pub(crate) struct BoxedChatMemberStatus(pub(crate) ChatMemberStatus);
 impl Default for BoxedChatMemberStatus {
     fn default() -> Self {
-        Self(ChatMemberStatus::Member(tdlib::types::ChatMemberStatusMember {
-            member_until_date: 0,
-        }))
+        Self(ChatMemberStatus::Member(
+            tdlib::types::ChatMemberStatusMember {
+                member_until_date: 0,
+            },
+        ))
     }
 }
 
@@ -157,6 +166,18 @@ pub(crate) struct BoxedChatNotificationSettings(pub(crate) ChatNotificationSetti
 #[derive(Clone, Debug, Default, PartialEq, glib::Boxed)]
 #[boxed_type(name = "BoxedChatPermissions")]
 pub(crate) struct BoxedChatPermissions(pub(crate) ChatPermissions);
+
+#[derive(Clone, Debug, PartialEq, glib::Boxed)]
+#[boxed_type(name = "BoxedChatAvailableReactions")]
+pub(crate) struct BoxedChatAvailableReactions(pub(crate) tdlib::enums::ChatAvailableReactions);
+
+impl Default for BoxedChatAvailableReactions {
+    fn default() -> Self {
+        // Only used for `Default` bounds of property storage; real chats
+        // always get their actual value in `Chat::new`.
+        Self(tdlib::enums::ChatAvailableReactions::All(Default::default()))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, glib::Boxed)]
 #[boxed_type(name = "BoxedDraftMessage", nullable)]

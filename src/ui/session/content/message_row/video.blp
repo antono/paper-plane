@@ -1,5 +1,4 @@
 using Gtk 4.0;
-using Adw 1;
 
 template $PaplMessageVideo : $PaplMessageBase {
   layout-manager: BinLayout {};
@@ -7,16 +6,6 @@ template $PaplMessageVideo : $PaplMessageBase {
   $PaplMessageBubble message_bubble {
     styles ["media"]
 
-    prefix: Overlay {
-      $PaplMessageMediaPicture picture {}
-
-      [overlay]
-      Label indicator {
-        halign: start;
-        valign: start;
-
-        styles ["osd-indicator"]
-      }
-    };
+    prefix: $PaplMediaVideoTile video_tile {};
   }
 }

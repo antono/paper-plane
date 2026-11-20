@@ -82,6 +82,20 @@ mod imp {
         pub(super) content: RefCell<model::BoxedMessageContent>,
         #[property(get)]
         pub(super) is_edited: Cell<bool>,
+        /// The id of the media album this message belongs to, or 0 if it
+        /// doesn't belong to one.
+        #[property(get, set, construct_only)]
+        pub(super) media_album_id: OnceCell<i64>,
+        /// The media album displayed by the row of this message.
+        ///
+        /// This is only set on the *representative* of a media album, which
+        /// is the message displayed in the chat history on behalf of all the
+        /// messages of the album. It is a weak reference because the album
+        /// owns its messages, so holding a strong reference from a member to
+        /// the album would create a cycle.
+        #[property(get)]
+        pub(super) album: glib::WeakRef<model::MediaAlbum>,
+        pub(super) properties_fetched: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -140,9 +154,16 @@ impl Message {
                 "reply-to",
                 td_message.reply_to.map(model::BoxedMessageReplyTo),
             )
+            .property("media-album-id", td_message.media_album_id)
             .build();
 
         let imp = obj.imp();
+
+        log::debug!(
+            "Message::new: message id={:?} content={:?}",
+            td_message.id,
+            td_message.content,
+        );
 
         imp.content
             .replace(model::BoxedMessageContent(td_message.content));
@@ -183,6 +204,88 @@ impl Message {
         self.chat().unwrap()
     }
 
+    /// The media album this message represents in the chat history, if any.
+    pub(crate) fn media_album(&self) -> Option<model::MediaAlbum> {
+        self.imp().album.upgrade()
+    }
+
+    /// Sets this message as the representative of the given media album, or
+    /// clears the representative role with `None`.
+    pub(crate) fn set_media_album(&self, album: Option<&model::MediaAlbum>) {
+        self.imp().album.set(album);
+        self.notify("album");
+    }
+
+    /// Fetches the message properties (`can_be_edited`, `can_be_deleted_*`)
+    /// from TDLib, if not already fetched.
+    ///
+    /// This is done lazily, because the properties are only needed when the
+    /// context menu of a message is opened, and fetching them for every
+    /// message in the history would be wasteful.
+    pub(crate) fn fetch_properties(&self) {
+        if self.imp().properties_fetched.get() {
+            return;
+        }
+        self.imp().properties_fetched.set(true);
+
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                let chat = obj.chat_();
+                match tdlib::functions::get_message_properties(
+                    chat.id(),
+                    obj.id(),
+                    chat.session_().client_().id(),
+                )
+                .await
+                {
+                    Ok(tdlib::enums::MessageProperties::MessageProperties(properties)) => {
+                        obj.set_can_be_edited(properties.can_be_edited);
+                        obj.set_can_be_deleted_only_for_self(
+                            properties.can_be_deleted_only_for_self,
+                        );
+                        obj.set_can_be_deleted_for_all_users(
+                            properties.can_be_deleted_for_all_users,
+                        );
+                    }
+                    Err(e) => log::warn!("Error getting message properties: {e:?}"),
+                }
+            }
+        ));
+    }
+
+    /// Fetches the reactions that can be added to this message from TDLib.
+    ///
+    /// The list contains the top reactions followed by the recent ones,
+    /// deduplicated by reaction type.
+    pub(crate) async fn available_reactions(
+        &self,
+    ) -> Result<Vec<tdlib::types::AvailableReaction>, tdlib::types::Error> {
+        let chat = self.chat_();
+        let reactions = tdlib::functions::get_message_available_reactions(
+            chat.id(),
+            self.id(),
+            8,
+            chat.session_().client_().id(),
+        )
+        .await?;
+
+        let tdlib::enums::AvailableReactions::AvailableReactions(data) = reactions;
+
+        let mut result: Vec<tdlib::types::AvailableReaction> = Vec::new();
+        for reaction in data.top_reactions.into_iter().chain(data.recent_reactions) {
+            if !result
+                .iter()
+                .any(|existing| existing.r#type == reaction.r#type)
+            {
+                result.push(reaction);
+            }
+        }
+
+        Ok(result)
+    }
+
     pub(crate) fn handle_update(&self, update: tdlib::enums::Update) {
         use tdlib::enums::Update::*;
 
@@ -208,10 +311,72 @@ impl Message {
         .await
     }
 
+    /// Adds a reaction with the given emoji to this message, or removes it if
+    /// the current user already chose it.
+    pub(crate) fn toggle_reaction(&self, emoji: &str) {
+        let is_chosen = self
+            .interaction_info()
+            .reactions()
+            .0
+            .iter()
+            .any(|reaction| {
+                reaction.is_chosen
+                    && matches!(&reaction.r#type,
+                        tdlib::enums::ReactionType::Emoji(r)
+                            if r.emoji == emoji)
+            });
+
+        let emoji_owned = emoji.to_string();
+
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                let emoji = emoji_owned;
+                let chat = obj.chat_();
+                let client_id = chat.session_().client_().id();
+                let reaction_type =
+                    tdlib::enums::ReactionType::Emoji(tdlib::types::ReactionTypeEmoji {
+                        emoji: emoji.to_string(),
+                    });
+
+                let result = if is_chosen {
+                    tdlib::functions::remove_message_reaction(
+                        chat.id(),
+                        obj.id(),
+                        reaction_type,
+                        client_id,
+                    )
+                    .await
+                } else {
+                    tdlib::functions::add_message_reaction(
+                        chat.id(),
+                        obj.id(),
+                        reaction_type,
+                        false,
+                        true,
+                        client_id,
+                    )
+                    .await
+                };
+
+                if let Err(e) = result {
+                    log::warn!("Error toggling a message reaction: {e:?}");
+                }
+            }
+        ));
+    }
+
     fn set_content(&self, content: model::BoxedMessageContent) {
         if self.content() == content {
             return;
         }
+        log::debug!(
+            "Message::set_content: message id={:?} old={:?} new={:?}",
+            self.id(),
+            self.content(),
+            content,
+        );
         self.imp().content.replace(content);
         self.notify_content();
     }

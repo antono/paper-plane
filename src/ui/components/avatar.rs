@@ -104,6 +104,51 @@ impl Default for Avatar {
     }
 }
 
+/// How an avatar looks when there is no photo to display.
+struct AvatarAppearance {
+    icon_name: Option<&'static str>,
+    text: Option<String>,
+    show_initials: bool,
+}
+
+fn appearance_for_user(user: &model::User) -> AvatarAppearance {
+    if user.user_type().0 == tdlib::enums::UserType::Deleted {
+        AvatarAppearance {
+            icon_name: Some("ghost-symbolic"),
+            text: Some(strings::user_display_name(user, true)),
+            show_initials: false,
+        }
+    } else {
+        AvatarAppearance {
+            icon_name: None,
+            text: Some(strings::user_display_name(user, true)),
+            show_initials: true,
+        }
+    }
+}
+
+fn appearance_for_chat(chat: &model::Chat) -> AvatarAppearance {
+    if chat.is_own_chat() {
+        AvatarAppearance {
+            icon_name: Some("user-bookmarks-symbolic"),
+            text: Some("-".into()),
+            show_initials: false,
+        }
+    } else if chat.is_replies_chat() {
+        AvatarAppearance {
+            icon_name: Some("mail-reply-sender-symbolic"),
+            text: Some("-".into()),
+            show_initials: false,
+        }
+    } else {
+        AvatarAppearance {
+            icon_name: None,
+            text: Some(chat.title().to_string()),
+            show_initials: true,
+        }
+    }
+}
+
 impl Avatar {
     pub(crate) fn new() -> Self {
         glib::Object::new()
@@ -212,20 +257,20 @@ impl Avatar {
 
         if let Some(item) = self.item() {
             if let Some(user) = item.downcast_ref::<model::User>() {
-                if user.user_type().0 == tdlib::enums::UserType::Deleted {
-                    imp.avatar.set_icon_name(Some("ghost-symbolic"));
-                    imp.avatar.set_show_initials(false);
-                } else {
+                let appearance = appearance_for_user(user);
+                imp.avatar.set_icon_name(appearance.icon_name);
+                imp.avatar.set_show_initials(appearance.show_initials);
+
+                // A photo replaces the default appearance.
+                if appearance.icon_name.is_none() {
                     self.load_image(user.avatar(), user.session_());
                 }
             } else if let Some(chat) = item.downcast_ref::<model::Chat>() {
-                if chat.is_own_chat() {
-                    imp.avatar.set_icon_name(Some("user-bookmarks-symbolic"));
-                    imp.avatar.set_show_initials(false);
-                } else if chat.is_replies_chat() {
-                    imp.avatar.set_icon_name(Some("mail-reply-sender-symbolic"));
-                    imp.avatar.set_show_initials(false);
-                } else {
+                let appearance = appearance_for_chat(chat);
+                imp.avatar.set_icon_name(appearance.icon_name);
+                imp.avatar.set_show_initials(appearance.show_initials);
+
+                if appearance.icon_name.is_none() {
                     self.load_image(chat.avatar(), chat.session_());
                 }
             }
@@ -238,13 +283,10 @@ impl Avatar {
         if let Some(item) = self.item() {
             if let Some(user) = item.downcast_ref::<model::User>() {
                 imp.avatar
-                    .set_text(Some(&strings::user_display_name(user, true)));
+                    .set_text(appearance_for_user(user).text.as_deref());
             } else if let Some(chat) = item.downcast_ref::<model::Chat>() {
-                if chat.is_own_chat() || chat.is_replies_chat() {
-                    imp.avatar.set_text(Some("-"));
-                } else {
-                    imp.avatar.set_text(Some(chat.title().as_ref()));
-                };
+                imp.avatar
+                    .set_text(appearance_for_chat(chat).text.as_deref());
             }
         }
     }

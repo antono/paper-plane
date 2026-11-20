@@ -1,16 +1,29 @@
+mod album_layout;
 mod base;
 mod bubble;
 mod document;
+mod file_status;
 mod indicators;
 mod label;
 mod location;
+mod media_album;
+mod media_album_grid;
+mod media_album_layout;
+mod media_download_button;
+mod media_loader;
+mod media_photo_tile;
 mod media_picture;
+mod media_thumbnail;
+mod media_video_tile;
 mod photo;
+mod reactions;
+mod reactions_chooser;
 mod reply;
 mod sticker;
 mod text;
 mod venue;
 mod video;
+mod voice;
 
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -29,16 +42,27 @@ pub(crate) use self::base::MessageBaseImpl;
 pub(crate) use self::bubble::MessageBubble;
 pub(crate) use self::document::MessageDocument;
 pub(crate) use self::document::StatusIndicator as MessageDocumentStatusIndicator;
+pub(crate) use self::file_status::FileStatus;
 pub(crate) use self::indicators::MessageIndicators;
 pub(crate) use self::label::MessageLabel;
 pub(crate) use self::location::MessageLocation;
+pub(crate) use self::media_album::MessageMediaAlbum;
+pub(crate) use self::media_album_grid::MediaAlbumGrid;
+pub(crate) use self::media_download_button::MediaDownloadButton;
+pub(crate) use self::media_loader::MediaLoader;
+pub(crate) use self::media_photo_tile::MediaPhotoTile;
 pub(crate) use self::media_picture::MediaPicture;
+pub(crate) use self::media_thumbnail::MediaThumbnail;
+pub(crate) use self::media_video_tile::MediaVideoTile;
 pub(crate) use self::photo::MessagePhoto;
+pub(crate) use self::reactions::MessageReactions;
+pub(crate) use self::reactions_chooser::ReactionsChooser;
 pub(crate) use self::reply::MessageReply;
 pub(crate) use self::sticker::MessageSticker;
 pub(crate) use self::text::MessageText;
 pub(crate) use self::venue::MessageVenue;
 pub(crate) use self::video::MessageVideo;
+pub(crate) use self::voice::MessageVoiceNote;
 use crate::model;
 use crate::ui;
 use crate::utils;
@@ -56,6 +80,14 @@ mod imp {
         pub(super) message: RefCell<Option<glib::Object>>,
         pub(super) content: RefCell<Option<gtk::Widget>>,
         pub(super) avatar: RefCell<Option<ui::Avatar>>,
+        /// The signal handler ids of the `can_be_*` properties of the current
+        /// message, which are used to update the actions when the properties
+        /// are fetched lazily.
+        pub(super) properties_handler_ids: RefCell<Vec<glib::SignalHandlerId>>,
+        /// The signal handler id of the `available-reactions` property of the
+        /// current message's chat, which is used to update the actions when
+        /// the chat's reaction settings change.
+        pub(super) chat_properties_handler_id: RefCell<Option<glib::SignalHandlerId>>,
     }
 
     #[glib::object_subclass]
@@ -77,6 +109,12 @@ mod imp {
             });
             klass.install_action("message-row.delete", None, move |widget, _, _| {
                 widget.show_delete_dialog(false)
+            });
+            klass.install_action("message-row.react-menu", None, move |widget, _, _| {
+                widget.show_reactions_chooser()
+            });
+            klass.install_action("message-row.copy-text", None, move |widget, _, _| {
+                widget.copy_text()
             });
         }
 
@@ -163,6 +201,43 @@ impl Row {
         }
     }
 
+    fn show_reactions_chooser(&self) {
+        let Ok(message) = self.message().downcast::<model::Message>() else {
+            return;
+        };
+
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                let reactions = match message.available_reactions().await {
+                    Ok(reactions) => reactions,
+                    Err(e) => {
+                        log::debug!("Error getting available message reactions: {e:?}");
+                        return;
+                    }
+                };
+
+                let emoji_reactions: Vec<_> = reactions
+                    .into_iter()
+                    .filter(|reaction| {
+                        matches!(reaction.r#type, tdlib::enums::ReactionType::Emoji(_))
+                    })
+                    .collect();
+
+                if emoji_reactions.is_empty() {
+                    return;
+                }
+
+                let chooser = ui::ReactionsChooser::new(&message);
+                chooser.set_reactions(emoji_reactions);
+                chooser.set_parent(&obj);
+                chooser.connect_closed(|chooser| chooser.unparent());
+                chooser.popup();
+            }
+        ));
+    }
+
     fn show_delete_dialog(&self, revoke: bool) {
         let window: gtk::Window = self.root().and_then(|root| root.downcast().ok()).unwrap();
 
@@ -215,6 +290,10 @@ impl Row {
         let imp = self.imp();
 
         if imp.message.borrow().as_ref() == Some(&message) {
+            // The message is unchanged, but the way it is displayed may have
+            // changed, e.g. when it became the representative of a media
+            // album with a second member.
+            self.update_content(message);
             return;
         }
 
@@ -283,9 +362,54 @@ impl Row {
 
         self.update_content(message.clone());
 
-        imp.message.replace(Some(message));
+        // Disconnect the properties handlers of the previous message
+        let previous = imp.message.replace(Some(message));
+        if let Some(previous) = previous {
+            if let Some(handler_id) = imp.chat_properties_handler_id.take() {
+                if let Some(previous_message) = previous.downcast_ref::<model::Message>() {
+                    previous_message.chat_().disconnect(handler_id);
+                }
+            }
+            for handler_id in imp.properties_handler_ids.borrow_mut().drain(..) {
+                previous.disconnect(handler_id);
+            }
+        } else {
+            debug_assert!(imp.properties_handler_ids.borrow().is_empty());
+        }
 
-        // TODO: Update actions when needed (e.g. chat permissions change)
+        // The `can_be_*` properties of a message are fetched lazily, when its
+        // context menu is opened. Update the actions whenever they change.
+        if let Some(message) = self.message().downcast_ref::<model::Message>() {
+            let obj_weak = self.downgrade();
+
+            for pspec_name in [
+                "can-be-edited",
+                "can-be-deleted-only-for-self",
+                "can-be-deleted-for-all-users",
+            ] {
+                let obj_weak = obj_weak.clone();
+
+                let handler_id = message.connect_notify_local(Some(pspec_name), move |_, _| {
+                    if let Some(obj) = obj_weak.upgrade() {
+                        obj.update_actions();
+                    }
+                });
+                imp.properties_handler_ids.borrow_mut().push(handler_id);
+            }
+
+            // Reactions availability is a chat-level setting. Update the
+            // actions whenever the chat's `available-reactions` changes.
+            let handler_id =
+                message
+                    .chat_()
+                    .connect_notify_local(Some("available-reactions"), move |_, _| {
+                        if let Some(obj) = obj_weak.upgrade() {
+                            obj.update_actions();
+                        }
+                    });
+            imp.chat_properties_handler_id.replace(Some(handler_id));
+        }
+
         self.update_actions();
 
         self.notify("message");
@@ -315,6 +439,38 @@ impl Row {
         }
     }
 
+    /// Prepares the context menu of this message.
+    ///
+    /// The `can_be_*` properties of a message are only fetched when its
+    /// context menu is opened, instead of for every message in the history.
+    fn prepare_message_menu(&self) {
+        if let Some(message) = self.message().downcast_ref::<model::Message>() {
+            message.fetch_properties();
+        }
+    }
+
+    fn copy_text(&self) {
+        let label = self
+            .imp()
+            .content
+            .borrow()
+            .as_ref()
+            .and_then(|content| find_message_label(content));
+
+        let Some(label) = label else {
+            return;
+        };
+
+        let text = label.selected_text().unwrap_or_else(|| label.plain_text());
+
+        if text.is_empty() {
+            return;
+        }
+
+        self.clipboard().set_text(&text);
+        utils::show_toast(self, gettext("Copied to clipboard"));
+    }
+
     fn update_actions(&self) {
         self.action_set_enabled("message-row.reply", self.can_reply_to_message());
         self.action_set_enabled("message-row.edit", self.can_edit_message());
@@ -329,6 +485,12 @@ impl Row {
             self.action_set_enabled("message-row.delete", false);
             self.action_set_enabled("message-row.revoke-delete", false);
         }
+
+        if let Some(message) = self.message().downcast_ref::<model::Message>() {
+            self.action_set_enabled("message-row.react-menu", message.chat_().can_react());
+        } else {
+            self.action_set_enabled("message-row.react-menu", false);
+        }
     }
 
     fn update_content(&self, message: glib::Object) {
@@ -341,37 +503,60 @@ impl Row {
                 _ => message_.is_outgoing(),
             };
 
-            match message_.content().0 {
-                // FIXME: Re-enable MessageVideo when
-                // https://github.com/paper-plane-developers/paper-plane/issues/410 is fixed
-                MessageAnimation(_) /*| MessageContent::MessageVideo(_)*/ => {
-                    self.update_specific_content::<_, ui::MessageVideo>(message_);
-                }
-                MessageAnimatedEmoji(data)
-                    if data.animated_emoji.sticker.clone().map(
-                        |s| matches!(s.format, tdlib::enums::StickerFormat::Webp | tdlib::enums::StickerFormat::Tgs)
-                    ).unwrap_or_default() => {
-                    self.update_specific_content::<_, ui::MessageSticker>(message_);
-                }
-                MessageLocation(_) | MessageLiveLocation(_) => {
-                    self.update_specific_content::<_, ui::MessageLocation>(message_);
-                }
-                MessagePhoto(_) => {
-                    self.update_specific_content::<_, ui::MessagePhoto>(message_);
-                }
-                MessageSticker(data)
-                    if matches!(data.sticker.format, tdlib::enums::StickerFormat::Webp | tdlib::enums::StickerFormat::Tgs) =>
-                {
-                    self.update_specific_content::<_, ui::MessageSticker>(message_);
-                }
-                MessageDocument(_) => {
-                    self.update_specific_content::<_, ui::MessageDocument>(message_);
-                }
-                MessageVenue(_) => {
-                    self.update_specific_content::<_, ui::MessageVenue>(message_);
-                }
-                _ => {
-                    self.update_specific_content::<_, ui::MessageText>(&message);
+            if message_.media_album().is_some_and(|album| album.len() >= 2) {
+                // The message represents a media album, which is displayed as
+                // a grid of tiles instead of as its individual content.
+                self.update_specific_content::<_, ui::MessageMediaAlbum>(message_);
+            } else {
+                match message_.content().0 {
+                    MessageAnimation(_) | MessageVideo(_) => {
+                        self.update_specific_content::<_, ui::MessageVideo>(message_);
+                    }
+                    MessageAnimatedEmoji(data)
+                        if data
+                            .animated_emoji
+                            .sticker
+                            .clone()
+                            .map(|s| {
+                                matches!(
+                                    s.format,
+                                    tdlib::enums::StickerFormat::Webp
+                                        | tdlib::enums::StickerFormat::Tgs
+                                        | tdlib::enums::StickerFormat::Webm
+                                )
+                            })
+                            .unwrap_or_default() =>
+                    {
+                        self.update_specific_content::<_, ui::MessageSticker>(message_);
+                    }
+                    MessageLocation(_) | MessageLiveLocation(_) => {
+                        self.update_specific_content::<_, ui::MessageLocation>(message_);
+                    }
+                    MessagePhoto(_) => {
+                        self.update_specific_content::<_, ui::MessagePhoto>(message_);
+                    }
+                    MessageSticker(data)
+                        if matches!(
+                            data.sticker.format,
+                            tdlib::enums::StickerFormat::Webp
+                                | tdlib::enums::StickerFormat::Tgs
+                                | tdlib::enums::StickerFormat::Webm
+                        ) =>
+                    {
+                        self.update_specific_content::<_, ui::MessageSticker>(message_);
+                    }
+                    MessageDocument(_) => {
+                        self.update_specific_content::<_, ui::MessageDocument>(message_);
+                    }
+                    MessageVoiceNote(_) => {
+                        self.update_specific_content::<_, ui::MessageVoiceNote>(message_);
+                    }
+                    MessageVenue(_) => {
+                        self.update_specific_content::<_, ui::MessageVenue>(message_);
+                    }
+                    _ => {
+                        self.update_specific_content::<_, ui::MessageText>(&message);
+                    }
                 }
             }
 
@@ -404,6 +589,10 @@ impl Row {
                 if let Some(old_content) = &*content_ref {
                     old_content.unparent();
                 }
+                log::debug!(
+                    "Row::update_specific_content: creating {}",
+                    std::any::type_name::<B>(),
+                );
 
                 let content = B::new(message);
                 content.set_hexpand(true);
@@ -416,6 +605,22 @@ impl Row {
             }
         }
     }
+}
+
+fn find_message_label(widget: &gtk::Widget) -> Option<ui::MessageLabel> {
+    if let Some(label) = widget.downcast_ref::<ui::MessageLabel>() {
+        return Some(label.clone());
+    }
+
+    let mut child = widget.first_child();
+    while let Some(child_) = child {
+        if let Some(label) = find_message_label(&child_) {
+            return Some(label);
+        }
+        child = child_.next_sibling();
+    }
+
+    None
 }
 
 fn can_send_messages_in_chat(chat: &model::Chat) -> bool {

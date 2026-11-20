@@ -205,6 +205,52 @@ messagebubble > box {
   padding: 6px 9px;
 }
 
+messagereactions {
+  margin-top: 3px;
+}
+
+messagereactions > button.reaction-chip {
+  padding: 2px 8px;
+  border-radius: 12px;
+  min-height: 0;
+}
+
+messagereactions > button.reaction-chip.chosen {
+  background-color: alpha(@accent_bg_color, 0.25);
+}
+
+reactionschooser > contents {
+  padding: 0;
+}
+
+reactionschooser button.emoji {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+reactionschooser button.emoji label.emoji {
+  font-size: x-large;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+reactionschooser button.emoji:hover label.emoji,
+reactionschooser button.emoji:focus label.emoji {
+  background-color: alpha(@accent_bg_color, 0.4);
+}
+
+reactionschooser button.emoji.premium label.emoji {
+  opacity: 0.45;
+}
+
+button.reaction-chip.premium {
+  opacity: 0.45;
+}
+
 messagebubble.location map {
   border-radius: 14px;
 }
@@ -268,6 +314,14 @@ messagebubble.venue .suffix {
   margin-bottom: 3px;
 }
 
+messagebubble.voice {
+  min-width: 220px;
+}
+
+messagebubble.voice .prefix {
+  margin: 3px 0;
+}
+
 messagebubble.document {
   min-width: 220px;
 }
@@ -327,6 +381,30 @@ messagebubble.document .file.with-thumbnail > overlay > picture {
   opacity: 1;
 }
 
+mediadownloadbutton {
+  background-color: alpha(black, 0.6);
+  color: white;
+  border-radius: 9999px;
+  padding: 8px;
+  transition: opacity 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+mediadownloadbutton > image {
+  -gtk-icon-size: 16px;
+}
+
+mediadownloadbutton > loadingindicator {
+  margin: 2px;
+}
+
+mediadownloadbutton:hover {
+  opacity: 0.85;
+}
+
+mediadownloadbutton:active {
+  opacity: 0.7;
+}
+
 messagebubble.media mediapicture {
   min-width: 150px;
   min-height: 100px;
@@ -342,6 +420,18 @@ messagebubble.venue.with-reply map {
   border-top-right-radius: 0;
   border-top-left-radius: 0;
   margin-top: 3px;
+}
+
+messagebubble.media:not(.with-label) messagereactions {
+  margin: 9px 0 2px 2px;
+}
+
+messagebubble.media:not(.with-label) > box {
+  padding-bottom: 4px;
+}
+
+messagebubble.media:not(.with-label) messagereactions > button.reaction-chip {
+  padding: 1px 6px;
 }
 
 messagebubble.document .file.with-thumbnail > overlay > picture {
@@ -364,6 +454,63 @@ messagebubble.media.with-label mediapicture {
   border-bottom-right-radius: 0;
   border-bottom-left-radius: 0;
   margin-bottom: 6px;
+}
+
+messagebubble.media mediaalbumgrid {
+  /* Negate margins to achieve 1px padding with the message bubble */
+  margin: -5px -8px;
+}
+
+messagebubble.media.with-reply mediaalbumgrid {
+  margin-top: 3px;
+}
+
+messagebubble.media.with-label mediaalbumgrid {
+  margin-bottom: 6px;
+}
+
+messagebubble.media mediaalbumgrid mediapicture {
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+}
+
+messagebubble.media.with-reply mediaalbumgrid mediapicture {
+  margin-top: 0;
+}
+
+messagebubble.media.with-label mediaalbumgrid mediapicture {
+  margin-bottom: 0;
+}
+
+/* Rounded corners on the tiles at the edges of the album */
+messagebubble.media mediaalbumgrid .edge-top.edge-left mediapicture {
+  border-top-left-radius: 14px;
+}
+
+messagebubble.media mediaalbumgrid .edge-top.edge-right mediapicture {
+  border-top-right-radius: 14px;
+}
+
+messagebubble.media mediaalbumgrid .edge-bottom.edge-left mediapicture {
+  border-bottom-left-radius: 14px;
+}
+
+messagebubble.media mediaalbumgrid .edge-bottom.edge-right mediapicture {
+  border-bottom-right-radius: 14px;
+}
+
+/* The album is not flush with the bubble when a reply or a caption is
+   above or below it, so its top or bottom tiles have square corners */
+messagebubble.media.with-reply mediaalbumgrid .edge-top mediapicture {
+  border-top-right-radius: 0;
+  border-top-left-radius: 0;
+}
+
+messagebubble.media.with-label mediaalbumgrid .edge-bottom mediapicture {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 messageindicators image {
@@ -514,4 +661,9 @@ splitbutton.small-pill:dir(rtl) > button,
 splitbutton.small-pill:dir(ltr) > menubutton > button {
   border-top-right-radius: 18px;
   border-bottom-right-radius: 18px;
+}
+
+/* Media viewer */
+.media-viewer .osd {
+  background-color: alpha(black, 0.6);
 }

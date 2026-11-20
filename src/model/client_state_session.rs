@@ -48,6 +48,7 @@ mod imp {
         #[property(get)]
         pub(super) channel_chats_notification_settings:
             RefCell<model::BoxedScopeNotificationSettings>,
+        pub(super) media_manager: OnceCell<model::MediaManager>,
     }
 
     #[glib::object_subclass]
@@ -139,6 +140,13 @@ impl ClientStateSession {
 
     pub(crate) fn me_(&self) -> model::User {
         self.me().unwrap()
+    }
+
+    /// Returns the [`MediaManager`] used by this session.
+    pub(crate) fn media_manager(&self) -> &model::MediaManager {
+        self.imp()
+            .media_manager
+            .get_or_init(|| model::MediaManager::new(self))
     }
 
     /// Returns the `model::Chat` of the specified id, if present.
@@ -304,10 +312,12 @@ impl ClientStateSession {
 
         glib::spawn_future_local(async move {
             while let Ok(file) = receiver.recv().await {
-                if !file.local.is_downloading_active {
+                let is_downloading_active = file.local.is_downloading_active;
+                f(file);
+
+                if !is_downloading_active {
                     break;
                 }
-                f(file);
             }
         });
 
@@ -386,8 +396,9 @@ impl ClientStateSession {
             // an error in the `SyncSender::send()` function if
             // `default-return glib::Continue(false)` is used. In the latter case, the Receiver
             // will be detached from the main context, which will cause the sending to fail.
-            entry.get_mut();
-            // .retain(|sender| sender.send(file.clone()).is_ok());
+            entry
+                .get_mut()
+                .retain(|sender| sender.send_blocking(file.clone()).is_ok());
 
             if !file.local.is_downloading_active || entry.get().is_empty() {
                 entry.remove();
@@ -436,6 +447,7 @@ impl ClientStateSession {
             ChatAction(ref data) => self.chat(data.chat_id).handle_update(update),
             MessageContent(ref data) => self.chat(data.chat_id).handle_update(update),
             MessageEdited(ref data) => self.chat(data.chat_id).handle_update(update),
+            MessageInteractionInfo(ref data) => self.chat(data.chat_id).handle_update(update),
             MessageMentionRead(ref data) => self.chat(data.chat_id).handle_update(update),
             MessageSendSucceeded(ref data) => self.chat(data.message.chat_id).handle_update(update),
             NewMessage(ref data) => self.chat(data.message.chat_id).handle_update(update),

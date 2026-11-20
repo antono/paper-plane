@@ -1,10 +1,12 @@
 mod contacts_window;
 mod content;
+mod playback_manager;
 mod preferences_dialog;
 mod row;
 mod sidebar;
 mod switcher;
 
+use std::cell::OnceCell;
 use std::sync::OnceLock;
 
 use adw::prelude::*;
@@ -23,7 +25,13 @@ pub(crate) use self::content::ChatHistoryRow;
 pub(crate) use self::content::ChatInfoWindow;
 pub(crate) use self::content::Content;
 pub(crate) use self::content::EventRow;
+pub(crate) use self::content::MediaAlbumGrid;
+pub(crate) use self::content::MediaDownloadButton;
+pub(crate) use self::content::MediaPhotoTile;
 pub(crate) use self::content::MediaPicture;
+pub(crate) use self::content::MediaThumbnail;
+pub(crate) use self::content::MediaVideoTile;
+pub(crate) use self::content::MediaViewer;
 pub(crate) use self::content::MessageBase;
 pub(crate) use self::content::MessageBaseExt;
 pub(crate) use self::content::MessageBaseImpl;
@@ -33,14 +41,21 @@ pub(crate) use self::content::MessageDocumentStatusIndicator;
 pub(crate) use self::content::MessageIndicators;
 pub(crate) use self::content::MessageLabel;
 pub(crate) use self::content::MessageLocation;
+pub(crate) use self::content::MessageMediaAlbum;
 pub(crate) use self::content::MessagePhoto;
+pub(crate) use self::content::MessageReactions;
 pub(crate) use self::content::MessageReply;
 pub(crate) use self::content::MessageRow;
 pub(crate) use self::content::MessageSticker;
 pub(crate) use self::content::MessageText;
 pub(crate) use self::content::MessageVenue;
 pub(crate) use self::content::MessageVideo;
+pub(crate) use self::content::MessageVoiceNote;
+pub(crate) use self::content::ReactionsChooser;
 pub(crate) use self::content::SendMediaWindow;
+pub(crate) use self::content::ViewerEntry;
+pub(crate) use self::content::ViewerItem;
+use self::playback_manager::PlaybackManager;
 pub(crate) use self::preferences_dialog::PreferencesDialog;
 pub(crate) use self::row::Row;
 pub(crate) use self::sidebar::Avatar as SidebarAvatar;
@@ -79,6 +94,11 @@ mod imp {
         pub(super) sidebar: TemplateChild<ui::Sidebar>,
         #[template_child]
         pub(super) content: TemplateChild<ui::Content>,
+        #[template_child]
+        pub(super) media_viewer: TemplateChild<ui::MediaViewer>,
+        /// The shared playback engine, owning the single media stream
+        /// used for playback across the session.
+        pub(super) playback_manager: OnceCell<PlaybackManager>,
     }
 
     #[glib::object_subclass]
@@ -185,6 +205,13 @@ impl Session {
         self.imp().model.upgrade()
     }
 
+    /// The shared playback engine of the session.
+    pub(crate) fn playback_manager(&self) -> &PlaybackManager {
+        self.imp()
+            .playback_manager
+            .get_or_init(PlaybackManager::new)
+    }
+
     pub(crate) fn select_chat(&self, id: ChatId) {
         match self.model().unwrap().try_chat(id) {
             Some(chat) => self.imp().sidebar.set_selected_chat(Some(&chat)),
@@ -212,6 +239,26 @@ impl Session {
 
     pub(crate) fn handle_paste_action(&self) {
         self.imp().content.handle_paste_action();
+    }
+
+    /// Shows the given media in the media viewer of the session.
+    ///
+    /// The viewer is revealed with a transition that starts at
+    /// `source_widget`.
+    pub(crate) fn show_media_viewer(
+        &self,
+        source_widget: &impl IsA<gtk::Widget>,
+        chat: &model::Chat,
+        entries: Vec<ViewerEntry>,
+        index: usize,
+    ) {
+        self.imp()
+            .media_viewer
+            .open(source_widget, chat, entries, index);
+    }
+
+    pub(crate) fn set_chat_open(&self, open: bool) {
+        self.imp().content.set_chat_open(open);
     }
 
     pub(crate) fn begin_chats_search(&self) {
