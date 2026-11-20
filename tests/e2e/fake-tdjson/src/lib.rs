@@ -227,10 +227,19 @@ impl Engine {
 
             "setTdlibParameters" => {
                 self.ok(client_id, extra);
-                if self.scenario.auth == "ready" {
-                    self.ready(client_id);
-                } else {
-                    self.auth_state(client_id, enums::AuthorizationState::WaitPhoneNumber);
+                match self.scenario.auth.as_str() {
+                    "ready" => self.ready(client_id),
+                    // A login step Paper Plane does not implement
+                    "email" => self.auth_state(
+                        client_id,
+                        enums::AuthorizationState::WaitEmailAddress(
+                            types::AuthorizationStateWaitEmailAddress {
+                                allow_apple_id: false,
+                                allow_google_id: false,
+                            },
+                        ),
+                    ),
+                    _ => self.auth_state(client_id, enums::AuthorizationState::WaitPhoneNumber),
                 }
             }
             "setAuthenticationPhoneNumber" => {

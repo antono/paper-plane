@@ -42,6 +42,8 @@ GDK_BACKEND=x11 GSK_RENDERER=cairo dbus-run-session -- \
   sent (`sendMessage`), and the pending message is replaced by the sent one;
   quitting closes TDLib.
 - **login-with-phone-number**: phone number, a wrong code, the right code.
+- **survives-unsupported-auth-state**: TDLib asks for a login email address,
+  which the app does not implement (it aborted before vitlav's fix 74f246d0).
 - **survives-failing-view-messages**: TDLib rejects `viewMessages`. This test
   found a crash (the result was unwrapped), fixed in consolidated@a8e73279.
 

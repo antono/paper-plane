@@ -274,10 +274,26 @@ def test_survives_failing_view_messages(app):
     app.quit()
 
 
+def test_survives_unsupported_auth_state(app):
+    """TDLib asks for a login email address, which Paper Plane does not
+    implement; it used to abort (unreachable!) and must keep running."""
+    app.wait_for("the application on the bus", app._registered)
+    app.wait_for("the tdlib parameters", lambda: app.requests("setTdlibParameters"))
+    time.sleep(1)
+    app.assert_alive()
+    assert app.state().get("client-state", [""])[0] == "ClientStateAuth"
+    app.stderr.flush()
+    assert "Unsupported state during auth" in app.stderr_path.read_text(errors="replace"), (
+        "the app did not get the email address state"
+    )
+    app.quit()
+
+
 TESTS = [
     ("chat-list-open-and-send", "two-chats.json", test_chat_list_open_and_send),
     ("login-with-phone-number", "login.json", test_login_with_phone_number),
     ("survives-failing-view-messages", "view-messages-fails.json", test_survives_failing_view_messages),
+    ("survives-unsupported-auth-state", "email-login.json", test_survives_unsupported_auth_state),
 ]
 
 

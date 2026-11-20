@@ -9,7 +9,9 @@ pub const DEFAULT_SCENARIO: &str = include_str!("../../scenarios/two-chats.json"
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Scenario {
-    /// `ready` (already logged in) or `phone` (log in with a phone number).
+    /// `ready` (already logged in), `phone` (log in with a phone number) or
+    /// `email` (TDLib asks for an email address, which the app does not
+    /// support).
     #[serde(default = "default_auth")]
     pub auth: String,
     /// The login code accepted when `auth` is `phone`.
