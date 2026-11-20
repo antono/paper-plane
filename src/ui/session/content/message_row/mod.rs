@@ -644,3 +644,25 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
         })
         .unwrap_or(true)
 }
+
+/// The checks of the message rows that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_checks() {
+    eprintln!("message label lookup for Copy Text");
+
+    // The text of a message is found wherever its label sits in the
+    // content widget, e.g. below the media of a caption.
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&gtk::Picture::new());
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    content.append(&inner);
+    assert!(find_message_label(content.upcast_ref()).is_none());
+
+    let label: ui::MessageLabel = glib::Object::new();
+    inner.append(&label);
+    assert_eq!(
+        find_message_label(content.upcast_ref()),
+        Some(label.clone())
+    );
+    assert_eq!(find_message_label(label.upcast_ref()), Some(label));
+}

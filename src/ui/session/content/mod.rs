@@ -165,3 +165,9 @@ impl Content {
         self.notify("chat");
     }
 }
+
+/// The checks of the chat widgets that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_checks() {
+    message_row::gtk_checks();
+}

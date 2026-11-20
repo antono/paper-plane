@@ -267,3 +267,10 @@ impl Session {
         imp.sidebar.begin_chats_search();
     }
 }
+
+/// The checks of the session widgets that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_checks() {
+    playback_manager::tests::check();
+    content::gtk_checks();
+}

@@ -260,3 +260,22 @@ impl Application {
         about.present(Some(&self.main_window()));
     }
 }
+
+/// Checks of the background mode that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    eprintln!("running in the background");
+
+    let app = Application::new();
+    assert!(app.imp().background_hold.borrow().is_none());
+
+    // Entering the background holds the application once, however often
+    // the window is hidden.
+    app.enter_background();
+    app.enter_background();
+    assert!(app.imp().background_hold.borrow().is_some());
+
+    // Presenting the window releases the hold.
+    app.imp().background_hold.take();
+    assert!(app.imp().background_hold.borrow().is_none());
+}

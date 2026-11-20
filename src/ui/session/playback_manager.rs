@@ -242,3 +242,122 @@ impl PlaybackManager {
         self.0.media_file.invalidate_contents();
     }
 }
+
+#[cfg(test)]
+pub(super) mod tests {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Writes a short silent PCM WAV file and returns its path.
+    fn silent_wav(name: &str) -> PathBuf {
+        let rate: u32 = 8000;
+        let samples = vec![0u8; rate as usize / 5]; // 0.2 s, 8 bit mono
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&1u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&8u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&samples);
+
+        let path = std::env::temp_dir().join(format!(
+            "paper-plane-test-{}-{name}.wav",
+            std::process::id()
+        ));
+        std::fs::write(&path, wav).unwrap();
+        path
+    }
+
+    fn iterate_until(condition: impl Fn() -> bool) -> bool {
+        let context = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !condition() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            context.iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// Hands the shared stream from one playback over to another and stops
+    /// it. Needs GTK, see `ui::tests`.
+    pub(crate) fn check() {
+        eprintln!("playback manager");
+
+        let first = silent_wav("first");
+        let second = silent_wav("second");
+        let (first_str, second_str) = (first.to_str().unwrap(), second.to_str().unwrap());
+
+        let manager = PlaybackManager::new();
+        let resets = Rc::new(Cell::new(0));
+        let prepared = Rc::new(Cell::new(0));
+        let errors = Rc::new(Cell::new(0));
+
+        let play = |path: &str| {
+            manager.play_file(
+                path,
+                glib::clone!(
+                    #[strong]
+                    resets,
+                    move || resets.set(resets.get() + 1)
+                ),
+                glib::clone!(
+                    #[strong]
+                    prepared,
+                    move |_| prepared.set(prepared.get() + 1)
+                ),
+                glib::clone!(
+                    #[strong]
+                    errors,
+                    move || errors.set(errors.get() + 1)
+                ),
+            );
+        };
+
+        play(first_str);
+        assert!(manager.is_current(first_str));
+        assert!(!manager.is_current(second_str));
+        assert!(
+            iterate_until(|| prepared.get() > 0 || errors.get() > 0),
+            "the stream was neither prepared nor failed"
+        );
+        assert_eq!(errors.get(), 0, "{:?}", manager.media_file().error());
+
+        // The second playback takes the stream over and resets the first.
+        play(second_str);
+        assert_eq!(resets.get(), 1);
+        assert!(manager.is_current(second_str));
+        assert!(iterate_until(|| prepared.get() > 1 || errors.get() > 0));
+        assert_eq!(errors.get(), 0, "{:?}", manager.media_file().error());
+
+        manager.toggle_pause();
+        assert!(manager.media_file().is_playing());
+        manager.toggle_pause();
+        assert!(!manager.media_file().is_playing());
+
+        manager.stop();
+        assert_eq!(resets.get(), 2);
+        assert!(!manager.is_current(second_str));
+        assert!(!manager.media_file().is_prepared());
+
+        // Stopping again does not reset the UI twice.
+        manager.stop();
+        assert_eq!(resets.get(), 2);
+
+        std::fs::remove_file(first).ok();
+        std::fs::remove_file(second).ok();
+    }
+}

@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use gtk::gio;
 use gtk::glib;
 use gtk::glib::translate::IntoGlib;
+use gtk::prelude::*;
 
 use crate::config;
 
@@ -36,8 +37,7 @@ fn register_resources(var: &str, default: &str) {
 }
 
 fn ui_files(path: &str, files: &mut Vec<String>) {
-    let children =
-        gio::resources_enumerate_children(path, gio::ResourceLookupFlags::NONE).unwrap();
+    let children = gio::resources_enumerate_children(path, gio::ResourceLookupFlags::NONE).unwrap();
 
     for child in children {
         let child_path = format!("{path}/{child}");
@@ -69,10 +69,15 @@ fn template_classes() -> Vec<(String, String)> {
     classes
 }
 
+/// All the checks that need GTK.
+///
+/// GTK can only be used from the thread that initialized it, while the test
+/// harness runs every test in a thread of its own, so they all run within
+/// this single test.
 #[test]
-fn templates_build_without_warnings() {
+fn gtk() {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
-        eprintln!("No display: skipping the template test");
+        eprintln!("No display: skipping the GTK tests");
         return;
     }
 
@@ -85,14 +90,21 @@ fn templates_build_without_warnings() {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let line = format!("{}: {:?}: {}", field("GLIB_DOMAIN"), level, field("MESSAGE"));
+        let line = format!(
+            "{}: {:?}: {}",
+            field("GLIB_DOMAIN"),
+            level,
+            field("MESSAGE")
+        );
         eprintln!("{line}");
 
         if matches!(
             level,
             glib::LogLevel::Error | glib::LogLevel::Critical | glib::LogLevel::Warning
-        ) && matches!(field("GLIB_DOMAIN").as_str(), "Gtk" | "Adwaita" | "GLib-GObject")
-        {
+        ) && matches!(
+            field("GLIB_DOMAIN").as_str(),
+            "Gtk" | "Adwaita" | "GLib-GObject"
+        ) {
             MESSAGES.lock().unwrap().push(line);
         }
 
@@ -105,6 +117,13 @@ fn templates_build_without_warnings() {
     register_resources("PAPER_PLANE_RESOURCES", config::RESOURCES_FILE);
     register_resources("PAPER_PLANE_UI_RESOURCES", config::UI_RESOURCES_FILE);
 
+    templates_build_without_warnings();
+    waveform_widget();
+    crate::application::gtk_check();
+    super::session::gtk_checks();
+}
+
+fn templates_build_without_warnings() {
     let classes = template_classes();
     assert!(
         classes.len() > 40,
@@ -156,4 +175,35 @@ fn templates_build_without_warnings() {
         "Templates with errors:\n{}",
         failures.join("\n")
     );
+}
+
+fn waveform_widget() {
+    eprintln!("waveform widget");
+
+    let waveform: super::Waveform = glib::Object::new();
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+    waveform.connect_notify_local(
+        Some("waveform"),
+        glib::clone!(
+            #[strong]
+            notified,
+            move |_, _| notified.set(notified.get() + 1)
+        ),
+    );
+
+    // 8 samples of 5 bits, all at the maximum, in base64
+    let data = glib::base64_encode(&[0xff; 5]).to_string();
+    waveform.set_waveform(&data);
+    waveform.set_waveform(&data);
+    assert_eq!(waveform.waveform(), data);
+    assert_eq!(
+        notified.get(),
+        1,
+        "setting the same waveform must not notify"
+    );
+
+    waveform.set_progress(0.5);
+    assert_eq!(waveform.progress(), 0.5);
+    waveform.set_progress(2.0);
+    assert_eq!(waveform.progress(), 1.0, "the progress is clamped");
 }
