@@ -77,6 +77,12 @@ fn template_classes() -> Vec<(String, String)> {
 #[test]
 fn gtk() {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        // Builds that are meant to run them (the Nix flake) set this, so
+        // that a missing display cannot silently skip them.
+        assert!(
+            std::env::var_os("PAPER_PLANE_REQUIRE_DISPLAY").is_none(),
+            "No display, but PAPER_PLANE_REQUIRE_DISPLAY is set"
+        );
         eprintln!("No display: skipping the GTK tests");
         return;
     }
