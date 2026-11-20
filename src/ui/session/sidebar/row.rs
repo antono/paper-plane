@@ -640,16 +640,19 @@ impl Row {
             let imp = self.imp();
             let chat = item.chat_();
             let icon = &imp.secret_chat_icon;
+            let title_label = &imp.title_label;
+            // Rows are recycled for other chats, so the style is also taken
+            // off again, and only the accent class is touched.
             match chat.chat_type() {
                 model::ChatType::Secret(_) => {
                     icon.set_icon_name(Some("padlock2-symbolic"));
-                    icon.set_css_classes(&["accent"]);
+                    icon.add_css_class("accent");
                     icon.set_visible(true);
-                    let title_label = &imp.title_label;
-                    title_label.set_css_classes(&["accent"]);
+                    title_label.add_css_class("accent");
                 }
                 _ => {
                     icon.set_visible(false);
+                    title_label.remove_css_class("accent");
                 }
             }
         }
@@ -812,5 +815,16 @@ pub(crate) fn gtk_check() {
         let row = Row::new();
         row.set_item(Some(&model::ChatListItem::new(&alice, &position)));
         assert!(!row.imp().secret_chat_icon.is_visible());
+
+        // A recycled row loses the secret chat style and keeps the other
+        // classes of its title.
+        let row = Row::new();
+        let title = &row.imp().title_label;
+        let classes_before = title.css_classes();
+        row.set_item(Some(&model::ChatListItem::new(&secret, &position)));
+        row.set_item(Some(&model::ChatListItem::new(&alice, &position)));
+        assert!(!row.imp().secret_chat_icon.is_visible());
+        assert!(!title.has_css_class("accent"));
+        assert_eq!(title.css_classes(), classes_before);
     });
 }
