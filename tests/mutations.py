@@ -218,6 +218,10 @@ MUTATIONS = [
      "let model = model::ChatHistoryModel::new_at_newest(&chat);",
      "let model = model::ChatHistoryModel::new(&chat);",
      "gtk"),
+    ("78359245", "chat requests after the session is gone", "src/model/chat.rs",
+     "        self.session()\n            .and_then(|session| session.client())",
+     "        Some(self.session_())\n            .and_then(|session| session.client())",
+     "unit:model::chat::tests::requests_after_the_session_is_gone_fail"),
     # End to end, found untested by the review
     ("7679e134", "downloads reach the waiting widgets (e2e)", "src/model/client_state_session.rs",
      ".retain(|sender| sender.send_blocking(file.clone()).is_ok());",
