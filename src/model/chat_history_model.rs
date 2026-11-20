@@ -363,6 +363,15 @@ impl ChatHistoryModel {
 
         let count = messages.len();
 
+        // The chat's last message is the newest one: once it is loaded, there
+        // is nothing newer, so new messages go straight into the list instead
+        // of waiting for a load that returns nothing, which only a further
+        // scroll would trigger.
+        let reached_newest = self
+            .chat()
+            .last_message()
+            .is_some_and(|last| messages.iter().any(|m| m.id() >= last.id()));
+
         let mut added = 0usize;
         let mut swaps: Vec<(model::Message, model::Message)> = Vec::new();
 
@@ -394,6 +403,13 @@ impl ChatHistoryModel {
         // it is sent.
         for (replaced, representative) in swaps {
             self.swap_representative(&replaced, &representative);
+        }
+
+        if reached_newest {
+            imp.at_newest.set(true);
+            self.flush_pending_new_messages();
+            log::debug!("load_newer_messages: prepended {count} messages, reached the newest");
+            return Ok(false);
         }
 
         log::debug!("load_newer_messages: prepended {count} messages, more = true");
