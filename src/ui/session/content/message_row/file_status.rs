@@ -27,11 +27,16 @@ impl From<&File> for FileStatus {
             Uploading(progress)
         } else if local.is_downloading_completed {
             Downloaded
-        } else if local.can_be_downloaded {
-            CanBeDownloaded
         } else {
-            dbg!(file);
-            unimplemented!("unknown file status");
+            // TDLib also reports files that cannot be downloaded (yet), e.g.
+            // an upload that was interrupted or a file that is not available
+            // anymore. They are offered for download like the others: a
+            // failing download is reported by TDLib instead of aborting the
+            // whole application here.
+            if !local.can_be_downloaded {
+                log::debug!("File {} cannot be downloaded", file.id);
+            }
+            CanBeDownloaded
         }
     }
 }
@@ -85,6 +90,13 @@ mod tests {
         let mut downloaded = file();
         downloaded.local.is_downloading_completed = true;
         assert_eq!(FileStatus::from(&downloaded), Downloaded);
+    }
+
+    #[test]
+    fn files_that_cannot_be_downloaded_do_not_abort() {
+        let mut unavailable = file();
+        unavailable.local.can_be_downloaded = false;
+        assert_eq!(FileStatus::from(&unavailable), CanBeDownloaded);
     }
 
     #[test]
