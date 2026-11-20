@@ -31,6 +31,9 @@ mod sponsored_message;
 mod supergroup;
 mod user;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use gtk::glib;
 use tdlib::enums::BlockList;
 use tdlib::enums::ChatMemberStatus;

@@ -558,3 +558,93 @@ impl WebmAnimation {
         self.notify("is-playing");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/ui/components/test-data")
+            .join(name)
+    }
+
+    /// Runs the worker over a whole file, without looping, and collects the
+    /// decoded frames (width, height, RGBA length).
+    fn decode_all(path: PathBuf) -> Result<Vec<(i32, i32, usize)>, String> {
+        let (_commands_sender, commands) = mpsc::channel();
+        let (sender, receiver) = async_channel::unbounded();
+
+        let worker = std::thread::spawn(move || run_worker(path, false, commands, sender));
+
+        let mut frames = vec![];
+        let result = loop {
+            match receiver.recv_blocking() {
+                Ok(WorkerMessage::Frame {
+                    width,
+                    height,
+                    rgba,
+                }) => frames.push((width, height, rgba.len())),
+                Ok(WorkerMessage::Done) => break Ok(frames),
+                Ok(WorkerMessage::Failed(e)) => break Err(e),
+                Err(_) => break Err("the worker exited without a result".to_owned()),
+            }
+        };
+
+        worker.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn codec_ids() {
+        assert_eq!(Codec::from_codec_id("V_VP8"), Some(Codec::Vp8));
+        assert_eq!(Codec::from_codec_id("V_VP9"), Some(Codec::Vp9));
+        assert_eq!(Codec::from_codec_id("V_AV1"), None);
+    }
+
+    #[test]
+    fn decoders_can_be_created() {
+        Decoder::new(Codec::Vp8).unwrap();
+        Decoder::new(Codec::Vp9).unwrap();
+    }
+
+    #[test]
+    fn invalid_data_is_an_error() {
+        let mut decoder = Decoder::new(Codec::Vp9).unwrap();
+        assert!(decoder.decode(&[0xff; 16]).is_err());
+    }
+
+    #[test]
+    fn decodes_vp9_with_alpha() {
+        let frames = decode_all(fixture("vp9-alpha.webm")).unwrap();
+        assert_eq!(frames.len(), 6);
+        assert!(
+            frames.iter().all(|&f| f == (64, 48, 64 * 48 * 4)),
+            "{frames:?}"
+        );
+    }
+
+    #[test]
+    fn decodes_vp8() {
+        let frames = decode_all(fixture("vp8.webm")).unwrap();
+        assert_eq!(frames.len(), 3);
+        assert!(
+            frames.iter().all(|&f| f == (32, 32, 32 * 32 * 4)),
+            "{frames:?}"
+        );
+    }
+
+    #[test]
+    fn missing_file_is_reported() {
+        let error = decode_all(fixture("missing.webm")).unwrap_err();
+        assert!(error.contains("Failed to open"), "{error}");
+    }
+
+    #[test]
+    fn non_webm_file_is_reported() {
+        let error = decode_all(Path::new(env!("CARGO_MANIFEST_DIR")).join(file!())).unwrap_err();
+        assert!(error.contains("Failed to demux"), "{error}");
+    }
+}

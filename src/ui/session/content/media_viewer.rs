@@ -901,3 +901,63 @@ impl MediaViewer {
         page.activate();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    const CHAT: i64 = ME;
+    const ALBUM: i64 = 777;
+
+    #[test]
+    fn viewer_items_of_messages() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, CHAT);
+
+            let photo = model::Message::new(&chat, message(CHAT, 1, DAY, 0, photo("")));
+            let item = ViewerItem::from_message(&photo).unwrap();
+            assert!(matches!(item, ViewerItem::Photo { .. }));
+            // The largest size of the photo is shown
+            assert_eq!(item.file().id, 1);
+            assert!(item.placeholder().is_none());
+
+            let text = model::Message::new(&chat, message(CHAT, 2, DAY, 0, text("hi")));
+            assert!(ViewerItem::from_message(&text).is_none());
+            assert!(stream_item(&text).is_none());
+        });
+    }
+
+    #[test]
+    fn newer_entries_include_album_members() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, CHAT);
+            let history = model::ChatHistoryModel::new(&chat);
+
+            new_message(&session, message(CHAT, 1, DAY, 0, photo("")));
+            new_message(&session, message(CHAT, 2, DAY, 0, text("not media")));
+            for id in 3..=5 {
+                new_message(&session, message(CHAT, id, DAY, ALBUM, photo("")));
+            }
+            new_message(&session, message(CHAT, 6, DAY, 0, photo("")));
+
+            let ids = |anchor| -> Vec<MessageId> {
+                collect_newer_entries(&chat, anchor)
+                    .iter()
+                    .map(|entry| entry.message_id)
+                    .collect()
+            };
+
+            // From the oldest to the newest, album members one by one
+            assert_eq!(ids(0), [1, 3, 4, 5, 6]);
+            assert_eq!(ids(1), [3, 4, 5, 6]);
+            assert_eq!(ids(4), [5, 6]);
+            assert!(ids(6).is_empty());
+
+            drop(history);
+            assert!(collect_newer_entries(&chat, 0).is_empty());
+        });
+    }
+}

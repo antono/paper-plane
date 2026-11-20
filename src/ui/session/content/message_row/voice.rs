@@ -409,3 +409,16 @@ fn format_duration(seconds: i32) -> String {
 
     format!("{minutes:02}:{seconds:02}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::format_duration;
+
+    #[test]
+    fn formats_minutes_and_seconds() {
+        assert_eq!(format_duration(0), "00:00");
+        assert_eq!(format_duration(7), "00:07");
+        assert_eq!(format_duration(137), "02:17");
+        assert_eq!(format_duration(3600), "60:00");
+    }
+}

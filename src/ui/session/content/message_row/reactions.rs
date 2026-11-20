@@ -189,6 +189,42 @@ mod imp {
             height
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::MessageReactions;
+        use super::SPACING;
+
+        #[test]
+        fn no_chips_take_no_height() {
+            assert_eq!(MessageReactions::packed_height(&[], 100), 0);
+        }
+
+        #[test]
+        fn chips_that_fit_stay_on_one_row() {
+            let chips = [(30, 20), (30, 24), (30, 20)];
+            assert_eq!(MessageReactions::packed_height(&chips, 200), 24);
+        }
+
+        #[test]
+        fn chips_wrap_to_new_rows() {
+            // Every chip takes 30 + SPACING, so two fit into 70 pixels.
+            let chips = [(30, 20); 5];
+            assert_eq!(
+                MessageReactions::packed_height(&chips, 70),
+                3 * 20 + 2 * SPACING
+            );
+        }
+
+        #[test]
+        fn a_too_wide_chip_still_gets_a_row() {
+            let chips = [(500, 20), (500, 20)];
+            assert_eq!(
+                MessageReactions::packed_height(&chips, 100),
+                2 * 20 + SPACING
+            );
+        }
+    }
 }
 
 glib::wrapper! {

@@ -146,7 +146,7 @@ impl MediaAlbum {
         None
     }
 
-    /// The messages of this album, ordered from the newest to the oldest.
+    /// The messages of this album, ordered from the oldest to the newest.
     pub(crate) fn messages(&self) -> Vec<model::Message> {
         let store = self.store();
         let mut res = Vec::with_capacity(store.n_items() as usize);
@@ -216,5 +216,86 @@ impl MediaAlbum {
         }
 
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    const CHAT: i64 = ME;
+
+    fn messages(captions: &[(MessageId, &str)]) -> Vec<model::Message> {
+        let session = session();
+        let chat = add_chat(&session, CHAT);
+        captions
+            .iter()
+            .map(|&(id, caption)| {
+                model::Message::new(&chat, message(CHAT, id, DAY, 1, photo(caption)))
+            })
+            .collect()
+    }
+
+    fn ids(album: &MediaAlbum) -> Vec<MessageId> {
+        album.messages().iter().map(|m| m.id()).collect()
+    }
+
+    #[test]
+    fn keeps_members_sorted_and_unique() {
+        isolated(|| {
+            let msgs = messages(&[(30, ""), (10, ""), (20, "")]);
+            let album = MediaAlbum::new(1);
+            assert!(album.is_empty());
+
+            for message in &msgs {
+                album.add_message(message.clone());
+            }
+            album.add_message(msgs[0].clone());
+
+            assert_eq!(album.len(), 3);
+            assert_eq!(ids(&album), [10, 20, 30]);
+            assert_eq!(album.first_message_id(), Some(10));
+            assert_eq!(album.last_message_id(), Some(30));
+        });
+    }
+
+    #[test]
+    fn removes_members() {
+        isolated(|| {
+            let msgs = messages(&[(10, ""), (20, ""), (30, "")]);
+            let album = MediaAlbum::new(1);
+            for message in msgs {
+                album.add_message(message);
+            }
+
+            assert_eq!(album.remove_message(20).map(|m| m.id()), Some(20));
+            assert!(album.remove_message(20).is_none());
+            assert_eq!(ids(&album), [10, 30]);
+
+            album.remove_message(10);
+            album.remove_message(30);
+            assert!(album.is_empty());
+            assert_eq!(album.first_message_id(), None);
+            assert_eq!(album.last_message_id(), None);
+        });
+    }
+
+    #[test]
+    fn caption_is_the_newest_non_empty_one() {
+        isolated(|| {
+            let msgs = messages(&[(10, "first"), (20, "second"), (30, "")]);
+            let album = MediaAlbum::new(1);
+            for message in msgs {
+                album.add_message(message);
+            }
+            assert_eq!(album.caption(), "second");
+
+            album.remove_message(20);
+            assert_eq!(album.caption(), "first");
+
+            album.remove_message(10);
+            assert_eq!(album.caption(), "");
+        });
     }
 }

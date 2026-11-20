@@ -952,3 +952,204 @@ fn message_ordering(list: &VecDeque<model::ChatHistoryItem>, message: &model::Me
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    const CHAT: i64 = ME;
+    const ALBUM: i64 = 777;
+
+    struct Fixture {
+        session: model::ClientStateSession,
+        chat: model::Chat,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let session = session();
+            let chat = add_chat(&session, CHAT);
+            Self { session, chat }
+        }
+
+        fn text(&self, id: MessageId) {
+            new_message(&self.session, message(CHAT, id, DAY, 0, text("hello")));
+        }
+
+        fn photo(&self, id: MessageId, album: i64) {
+            new_message(&self.session, message(CHAT, id, DAY, album, photo("")));
+        }
+
+        fn delete(&self, ids: &[MessageId]) {
+            delete_messages(&self.session, CHAT, ids);
+        }
+    }
+
+    /// The ids of the message rows, from the newest to the oldest, with the
+    /// number of album members a row displays (0 for a normal row).
+    fn rows(model: &ChatHistoryModel) -> Vec<(MessageId, u32)> {
+        (0..model.n_items())
+            .filter_map(|i| {
+                let item = model.item(i).and_downcast::<model::ChatHistoryItem>()?;
+                let message = item.message()?.clone();
+                let members = message.media_album().map_or(0, |album| album.len());
+                Some((message.id(), members))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn new_messages_are_pushed_to_the_front() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+            assert!(model.at_newest());
+
+            f.text(1);
+            f.text(2);
+            assert_eq!(rows(&model), [(2, 0), (1, 0)]);
+            // One day divider above the messages
+            assert_eq!(model.n_items(), 3);
+        });
+    }
+
+    #[test]
+    fn album_members_share_one_row() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            f.text(1);
+            f.photo(2, ALBUM);
+            // A single member is displayed as a normal photo.
+            assert_eq!(rows(&model), [(2, 1), (1, 0)]);
+
+            f.photo(3, ALBUM);
+            f.photo(4, ALBUM);
+            assert_eq!(rows(&model), [(2, 3), (1, 0)]);
+
+            // The members are found at the row of the album.
+            let album_row = model.find_message_position(2).unwrap();
+            assert_eq!(model.find_message_position(4), Some(album_row));
+            assert_eq!(model.find_message_position(1), Some(album_row + 1));
+        });
+    }
+
+    #[test]
+    fn an_older_member_becomes_the_representative() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            f.photo(10, ALBUM);
+            f.photo(9, ALBUM);
+            assert_eq!(rows(&model), [(9, 2)]);
+            assert!(f.chat.message(10).unwrap().media_album().is_none());
+        });
+    }
+
+    #[test]
+    fn non_media_messages_are_never_grouped() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            new_message(&f.session, message(CHAT, 1, DAY, ALBUM, text("a")));
+            new_message(&f.session, message(CHAT, 2, DAY, ALBUM, text("b")));
+            assert_eq!(rows(&model), [(2, 0), (1, 0)]);
+        });
+    }
+
+    #[test]
+    fn deleting_album_members() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            f.text(1);
+            for id in 2..=4 {
+                f.photo(id, ALBUM);
+            }
+
+            // The next-oldest member takes over the row of the representative.
+            f.delete(&[2]);
+            assert_eq!(rows(&model), [(3, 2), (1, 0)]);
+
+            // With a single member left, it is shown as a normal message.
+            f.delete(&[3]);
+            assert_eq!(rows(&model), [(4, 0), (1, 0)]);
+            assert!(f.chat.message(4).unwrap().media_album().is_none());
+
+            f.delete(&[4]);
+            assert_eq!(rows(&model), [(1, 0)]);
+        });
+    }
+
+    #[test]
+    fn deleting_a_newer_member_keeps_the_row() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            for id in 2..=4 {
+                f.photo(id, ALBUM);
+            }
+            f.delete(&[4]);
+            assert_eq!(rows(&model), [(2, 2)]);
+
+            f.delete(&[3]);
+            assert_eq!(rows(&model), [(2, 0)]);
+        });
+    }
+
+    #[test]
+    fn deleting_an_unloaded_message_is_ignored() {
+        isolated(|| {
+            let f = Fixture::new();
+            let model = ChatHistoryModel::new(&f.chat);
+
+            f.text(1);
+            f.delete(&[42]);
+            assert_eq!(rows(&model), [(1, 0)]);
+        });
+    }
+
+    #[test]
+    fn new_messages_wait_while_not_at_the_newest() {
+        isolated(|| {
+            let f = Fixture::new();
+            f.text(1);
+
+            let model = ChatHistoryModel::new_for_message(&f.chat, 1);
+            assert!(!model.at_newest());
+            assert_eq!(model.anchor(), 1);
+
+            f.text(2);
+            assert!(rows(&model).is_empty());
+
+            // A deleted pending message is dropped from the queue.
+            f.delete(&[2]);
+            assert!(model.imp().pending_new_messages.borrow().is_empty());
+        });
+    }
+
+    #[test]
+    fn unread_chats_are_anchored_at_the_last_read_message() {
+        isolated(|| {
+            let f = Fixture::new();
+            f.session.handle_update(tdlib::enums::Update::ChatReadInbox(
+                tdlib::types::UpdateChatReadInbox {
+                    chat_id: CHAT,
+                    last_read_inbox_message_id: 5,
+                    unread_count: 3,
+                },
+            ));
+
+            let model = ChatHistoryModel::new(&f.chat);
+            assert_eq!(model.anchor(), 5);
+            assert!(model.is_unread_anchor());
+            assert!(!model.at_newest());
+        });
+    }
+}

@@ -127,3 +127,95 @@ fn row_splits(n: usize, ratios: &[f64]) -> Vec<usize> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size(width: f64, height: f64) -> PhysicalSize {
+        PhysicalSize { width, height }
+    }
+
+    fn rows(rects: &[Rect]) -> Vec<usize> {
+        let mut rows: Vec<(f64, usize)> = vec![];
+        for rect in rects {
+            match rows.last_mut() {
+                Some((y, count)) if *y == rect.y => *count += 1,
+                _ => rows.push((rect.y, 1)),
+            }
+        }
+        rows.into_iter().map(|(_, count)| count).collect()
+    }
+
+    #[test]
+    fn empty_album_has_no_tiles() {
+        assert!(calculate_album_grid(&[], 400.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn row_patterns_follow_the_item_count() {
+        let square = size(100.0, 100.0);
+        for (n, expected) in [
+            (1, vec![1]),
+            (2, vec![1, 1]),
+            (3, vec![1, 2]),
+            (4, vec![2, 2]),
+            (5, vec![2, 3]),
+            (6, vec![3, 3]),
+            (7, vec![3, 2, 2]),
+            (8, vec![3, 3, 2]),
+            (9, vec![3, 3, 3]),
+            (10, vec![4, 3, 3]),
+        ] {
+            let rects = calculate_album_grid(&vec![square; n], 400.0, 2.0);
+            assert_eq!(rects.len(), n);
+            assert_eq!(rows(&rects), expected, "{n} items");
+        }
+    }
+
+    #[test]
+    fn two_portrait_items_share_a_row() {
+        let portrait = size(60.0, 100.0);
+        let rects = calculate_album_grid(&[portrait, portrait], 400.0, 2.0);
+        assert_eq!(rows(&rects), [2]);
+    }
+
+    #[test]
+    fn large_albums_are_grouped_in_threes() {
+        assert_eq!(row_splits(11, &[1.0; 11]), [3, 3, 3, 2]);
+        assert_eq!(row_splits(13, &[1.0; 13]), [3, 3, 3, 4]);
+        assert_eq!(row_splits(12, &[1.0; 12]), [3, 3, 3, 3]);
+    }
+
+    #[test]
+    fn rows_fill_the_width_and_do_not_overlap() {
+        let sizes = [
+            size(1920.0, 1080.0),
+            size(1080.0, 1920.0),
+            size(100.0, 100.0),
+            size(5000.0, 100.0), // clamped to MAX_RATIO
+            size(100.0, 5000.0), // clamped to MIN_RATIO
+        ];
+        let (max_width, spacing) = (400.0, 2.0);
+        let rects = calculate_album_grid(&sizes, max_width, spacing);
+
+        for rect in &rects {
+            assert!(rect.x >= 0.0 && rect.y >= 0.0);
+            assert!(rect.x + rect.width <= max_width + 1.0, "{rect:?} too wide");
+            let ratio = rect.width / rect.height;
+            assert!(
+                (MIN_RATIO - 0.05..=MAX_RATIO + 0.05).contains(&ratio),
+                "{rect:?}"
+            );
+        }
+
+        // The last tile of every row reaches the right edge (within rounding).
+        for pair in rects.windows(2) {
+            if pair[1].y != pair[0].y {
+                let right = pair[0].x + pair[0].width;
+                assert!((right - max_width).abs() <= 1.0, "{:?}", pair[0]);
+                assert!(pair[1].y >= pair[0].y + pair[0].height, "rows overlap");
+            }
+        }
+    }
+}
