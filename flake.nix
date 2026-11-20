@@ -93,6 +93,9 @@
           checkPhase = ''
             runHook preCheck
             export HOME=$TMPDIR XDG_RUNTIME_DIR=$TMPDIR
+            # The tests and clippy build two more debug targets; without
+            # debug info they take a fraction of the disk space.
+            export CARGO_PROFILE_DEV_DEBUG=0
             GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 GTK_A11Y=none PAPER_PLANE_REQUIRE_DISPLAY=1 \
               dbus-run-session --config-file=${pkgs.dbus}/share/dbus-1/session.conf \
               xvfb-run -a meson test --print-errorlogs --num-processes 1
