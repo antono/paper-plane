@@ -126,6 +126,7 @@ fn gtk() {
     templates_build_without_warnings();
     waveform_widget();
     crate::application::gtk_check();
+    crate::expressions::gtk_check();
     super::session::gtk_checks();
 }
 

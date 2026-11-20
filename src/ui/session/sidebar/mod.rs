@@ -240,3 +240,9 @@ impl Sidebar {
         self.imp().navigation_view.push_by_tag("archived-chats");
     }
 }
+
+/// The checks of the sidebar that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_checks() {
+    row::gtk_check();
+}

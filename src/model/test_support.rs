@@ -144,9 +144,64 @@ pub(crate) fn add_private_chat(
     user_id: i64,
     title: &str,
 ) -> model::Chat {
+    add_chat_of_type(
+        session,
+        id,
+        enums::ChatType::Private(types::ChatTypePrivate { user_id }),
+        title,
+    )
+}
+
+/// Adds a secret chat with the user `user_id`, who must be known to the
+/// session (see [`add_user`]).
+pub(crate) fn add_secret_chat(
+    session: &model::ClientStateSession,
+    id: ChatId,
+    secret_chat_id: i32,
+    user_id: i64,
+) -> model::Chat {
+    session.handle_update(enums::Update::SecretChat(types::UpdateSecretChat {
+        secret_chat: types::SecretChat {
+            id: secret_chat_id,
+            user_id,
+            state: enums::SecretChatState::Ready,
+            is_outbound: true,
+            key_hash: String::new(),
+            layer: 0,
+        },
+    }));
+    add_chat_of_type(
+        session,
+        id,
+        enums::ChatType::Secret(types::ChatTypeSecret {
+            secret_chat_id,
+            user_id,
+        }),
+        "Secret",
+    )
+}
+
+/// The forward info of a message originally sent by the user `user_id`.
+pub(crate) fn forwarded_from(user_id: i64) -> Option<types::MessageForwardInfo> {
+    Some(types::MessageForwardInfo {
+        origin: enums::MessageOrigin::User(types::MessageOriginUser {
+            sender_user_id: user_id,
+        }),
+        date: DAY - 60,
+        source: None,
+        public_service_announcement_type: String::new(),
+    })
+}
+
+fn add_chat_of_type(
+    session: &model::ClientStateSession,
+    id: ChatId,
+    r#type: enums::ChatType,
+    title: &str,
+) -> model::Chat {
     let chat = types::Chat {
         id,
-        r#type: enums::ChatType::Private(types::ChatTypePrivate { user_id }),
+        r#type,
         title: title.to_owned(),
         photo: None,
         accent_color_id: 0,

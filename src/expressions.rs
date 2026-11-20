@@ -126,3 +126,46 @@ fn restriction_label_expression<T: StaticType, V: ToValue>(value: &V) -> gtk::Ex
     )
     .upcast()
 }
+
+/// Checks of the Replies chat (#467) that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("chat names and senders in the Replies chat");
+
+    const REPLIES: i64 = 1271266957;
+
+    isolated(|| {
+        let session = session();
+        let saved = add_chat(&session, ME);
+        add_user(&session, REPLIES);
+        let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies bot title");
+        add_user(&session, 42);
+        let alice = add_private_chat(&session, 42, 42, "Alice");
+
+        let name = |chat: &model::Chat| {
+            chat_display_name(gtk::ConstantExpression::new(chat).upcast_ref())
+                .evaluate_as::<String, _>(None::<&glib::Object>)
+                .unwrap()
+        };
+        assert_eq!(name(&saved), gettext("Saved Messages"));
+        assert_eq!(name(&replies), gettext("Replies"));
+        assert_eq!(name(&alice), "Alice");
+
+        // A reply in the Replies chat is a forward of the original message:
+        // its sender is shown as the original author, not the Replies bot.
+        let mut td_message = message(REPLIES, 1, DAY, 0, text("a reply"));
+        td_message.sender_id = tdlib::enums::MessageSender::User(
+            tdlib::types::MessageSenderUser { user_id: REPLIES },
+        );
+        td_message.is_outgoing = false;
+        td_message.forward_info = forwarded_from(42);
+        let reply = model::Message::new(&replies, td_message);
+        let sender = reply
+            .sender_display_name_expression()
+            .evaluate_as::<String, _>(None::<&glib::Object>)
+            .unwrap();
+        assert!(sender.contains("User 42"), "{sender}");
+    });
+}

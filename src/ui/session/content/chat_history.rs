@@ -846,3 +846,25 @@ where
         }
     ));
 }
+
+/// Checks of the secret chat title (#625) that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("secret chat style in the chat history");
+
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let secret = add_secret_chat(&session, 900, 7, 42);
+        let alice = add_private_chat(&session, 42, 42, "Alice");
+
+        let history = ChatHistory::new();
+        history.set_chat(Some(&secret));
+        assert!(history.is_secret_chat());
+        history.set_chat(Some(&alice));
+        assert!(!history.is_secret_chat());
+        history.set_chat(None);
+    });
+}

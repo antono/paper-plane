@@ -272,5 +272,6 @@ impl Session {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     playback_manager::tests::check();
+    sidebar::gtk_checks();
     content::gtk_checks();
 }

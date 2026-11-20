@@ -779,3 +779,38 @@ fn timestamp_text(date: i64) -> glib::GString {
     }
     .unwrap()
 }
+
+/// Checks of the secret chat style (#625) that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("secret chat style in the chat list");
+
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let secret = add_secret_chat(&session, 900, 7, 42);
+        let alice = add_private_chat(&session, 42, 42, "Alice");
+        let position = tdlib::types::ChatPosition {
+            list: tdlib::enums::ChatList::Main,
+            order: 1,
+            is_pinned: false,
+            source: None,
+        };
+
+        let row = Row::new();
+        row.set_item(Some(&model::ChatListItem::new(&secret, &position)));
+        let imp = row.imp();
+        assert!(imp.secret_chat_icon.is_visible());
+        assert_eq!(
+            imp.secret_chat_icon.icon_name().as_deref(),
+            Some("padlock2-symbolic")
+        );
+        assert!(imp.title_label.has_css_class("accent"));
+
+        let row = Row::new();
+        row.set_item(Some(&model::ChatListItem::new(&alice, &position)));
+        assert!(!row.imp().secret_chat_icon.is_visible());
+    });
+}
