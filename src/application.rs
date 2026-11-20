@@ -61,6 +61,7 @@ mod imp {
             gtk::Window::set_default_icon_name(config::APP_ID);
 
             obj.setup_gactions();
+            obj.setup_automation();
             obj.setup_accels();
             obj.load_color_scheme();
         }

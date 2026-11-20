@@ -3,6 +3,7 @@
 #![allow(clippy::format_push_string)]
 
 mod application;
+mod automation;
 mod ui;
 #[rustfmt::skip]
 #[allow(clippy::all)]
