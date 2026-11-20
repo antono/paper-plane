@@ -153,6 +153,12 @@ impl ChatHistoryModel {
         Self::with_anchor(chat, message_id, false, false)
     }
 
+    /// Creates a `ChatHistoryModel` for the specified chat at its newest
+    /// messages, also when it has unread messages.
+    pub(crate) fn new_at_newest(chat: &model::Chat) -> Self {
+        Self::with_anchor(chat, 0, false, true)
+    }
+
     fn with_anchor(
         chat: &model::Chat,
         anchor: MessageId,

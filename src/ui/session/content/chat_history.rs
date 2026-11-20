@@ -458,8 +458,22 @@ impl ChatHistory {
                     // even if the view was scrolled up, as in the official
                     // clients (Yacha's 637fadfa in the modernization branch).
                     if msg.is_outgoing() && msg.sending_state().is_some() {
-                        obj.set_sticky(true);
-                        obj.scroll_down();
+                        let at_newest = obj
+                            .imp()
+                            .model
+                            .borrow()
+                            .as_ref()
+                            .is_none_or(|model| model.at_newest());
+                        if at_newest {
+                            obj.set_sticky(true);
+                            obj.scroll_down();
+                        } else {
+                            // The newest messages are not loaded (the chat was
+                            // opened at its unread messages or at an old one),
+                            // so the sent message would wait out of sight:
+                            // show the newest messages instead.
+                            obj.go_to_newest();
+                        }
                     }
                 }
             ));
@@ -775,7 +789,9 @@ impl ChatHistory {
             return;
         };
 
-        let model = model::ChatHistoryModel::new(&chat);
+        // Not ChatHistoryModel::new, which opens chats with unread messages
+        // at the first unread one.
+        let model = model::ChatHistoryModel::new_at_newest(&chat);
 
         self.set_history_model(&chat, &model);
     }
@@ -876,6 +892,28 @@ pub(crate) fn gtk_check() {
         assert!(history.is_secret_chat());
         history.set_chat(Some(&alice));
         assert!(!history.is_secret_chat());
+
+        // Sending a message while the newest messages are not loaded shows
+        // the newest ones, instead of queueing the message out of sight.
+        eprintln!("sending from a history opened at the unread messages");
+        let session2 = session.clone();
+        let chat = add_private_chat(&session2, 43, 42, "Unread");
+        session2.handle_update(tdlib::enums::Update::ChatReadInbox(
+            tdlib::types::UpdateChatReadInbox {
+                chat_id: 43,
+                last_read_inbox_message_id: 5,
+                unread_count: 10,
+            },
+        ));
+        history.set_chat(Some(&chat));
+        let model = || history.imp().model.borrow().clone().unwrap();
+        assert!(!model().at_newest(), "the chat opens at its unread messages");
+        let mut sending = message(43, 1 << 40, DAY, 0, text("sent from here"));
+        sending.sending_state = Some(tdlib::enums::MessageSendingState::Pending(
+            tdlib::types::MessageSendingStatePending { sending_id: 0 },
+        ));
+        new_message(&session2, sending);
+        assert!(model().at_newest(), "sending shows the newest messages");
 
         // The report of viewed messages is delayed (78359245); a chat closed
         // in the meantime must not crash it. glib catches panics inside
