@@ -196,10 +196,14 @@ impl Waveform {
     }
 }
 
-/// Decodes the waveform of a voice note. TDLib provides it as a string where
-/// each sample is 5 bits wide, packed in little-endian bit order.
+/// Decodes the waveform of a voice note.
+///
+/// TDLib provides it as `bytes`, which its JSON interface encodes in base64.
+/// Every sample of the decoded bytes is 5 bits wide, packed in little-endian
+/// bit order.
 fn decode_waveform(waveform: &str) -> Vec<f32> {
-    let bytes = waveform.as_bytes();
+    let decoded = glib::base64_decode(waveform);
+    let bytes: &[u8] = &decoded;
 
     let sample_count = bytes.len() * 8 / 5;
     let mut peaks = Vec::with_capacity(sample_count);
@@ -219,4 +223,46 @@ fn decode_waveform(waveform: &str) -> Vec<f32> {
     }
 
     peaks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Packs 5-bit samples the way TDLib does and encodes them in base64.
+    fn encode(samples: &[u8]) -> String {
+        let mut bytes = vec![0u8; (samples.len() * 5).div_ceil(8)];
+        for (i, &sample) in samples.iter().enumerate() {
+            let bit = i * 5;
+            let value = u16::from(sample & 0x1f) << (bit % 8);
+            bytes[bit / 8] |= value as u8;
+            if let Some(next) = bytes.get_mut(bit / 8 + 1) {
+                *next |= (value >> 8) as u8;
+            }
+        }
+        glib::base64_encode(&bytes).to_string()
+    }
+
+    #[test]
+    fn empty_waveform_has_no_peaks() {
+        assert!(decode_waveform("").is_empty());
+    }
+
+    #[test]
+    fn decodes_base64_packed_samples() {
+        let samples = [0, 31, 1, 16, 8, 30, 2, 31];
+        let peaks = decode_waveform(&encode(&samples));
+
+        assert_eq!(peaks.len(), samples.len());
+        for (peak, sample) in peaks.iter().zip(samples) {
+            assert!((peak - f32::from(sample) / 31.0).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn peaks_are_normalized() {
+        let peaks = decode_waveform(&encode(&[31; 100]));
+        assert_eq!(peaks.len(), 100);
+        assert!(peaks.iter().all(|&p| (0.0..=1.0).contains(&p)));
+    }
 }
