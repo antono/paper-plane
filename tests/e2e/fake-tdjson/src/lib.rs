@@ -316,6 +316,20 @@ impl Engine {
                 let me = scenario::user(&self.scenario.me);
                 self.emit(client_id, enums::User::User(me), extra);
             }
+            "createPrivateChat" => {
+                let user_id = request["user_id"].as_i64().unwrap_or_default();
+                match self.scenario.chats.iter().find(|c| c.with.id == user_id).cloned() {
+                    Some(spec) => {
+                        let chat = scenario::private_chat(&spec, 0);
+                        self.update(
+                            client_id,
+                            enums::Update::NewChat(types::UpdateNewChat { chat: chat.clone() }),
+                        );
+                        self.emit(client_id, enums::Chat::Chat(chat), extra);
+                    }
+                    None => self.error(client_id, extra, 400, "USER_ID_INVALID"),
+                }
+            }
             "getUser" => {
                 let id = request["user_id"].as_i64().unwrap_or_default();
                 let person = std::iter::once(&self.scenario.me)

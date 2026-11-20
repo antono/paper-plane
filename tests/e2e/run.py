@@ -178,6 +178,22 @@ class App:
             lambda: self.state().get("client-state", [""])[0] == "ClientStateSession",
         )
 
+    def chat_rows(self):
+        """The rows of the chat list (id, title, unread), as now loaded."""
+        path = self.out / "chats.txt"
+        path.unlink(missing_ok=True)
+        self.action("auto-list-chats")
+        self.wait_for("chats.txt", path.exists, 5)
+        return [line.split("\t") for line in path.read_text().splitlines()]
+
+    def open_chat(self, chat_id):
+        """Opens a chat once the chat list has it, as a user would."""
+        self.wait_for(
+            f"chat {chat_id} in the chat list",
+            lambda: any(row[0] == str(chat_id) for row in self.chat_rows()),
+        )
+        self.action("auto-open-chat", f"int64 {chat_id}")
+
     def _registered(self):
         try:
             self.action("auto-state")
@@ -196,6 +212,18 @@ class App:
             raise Failure("the application did not quit")
         if code != 0:
             raise Failure(f"the application quit with {code}")
+
+    def diagnostics(self):
+        """The last reported state and requests, for a failure report."""
+        parts = []
+        state = self.out / "state.txt"
+        if state.exists():
+            lines = state.read_text().splitlines()
+            parts.append("--- last state.txt (head)\n" + "\n".join(lines[:12]))
+        if self.request_log.exists():
+            requests = self.request_log.read_text().splitlines()[-8:]
+            parts.append("--- last requests\n" + "\n".join(r[:200] for r in requests))
+        return "\n".join(parts)
 
     def close(self, keep_to=None):
         if self.process.poll() is None:
@@ -216,13 +244,12 @@ class App:
 def test_chat_list_open_and_send(app):
     app.wait_until_logged_in()
 
-    app.action("auto-list-chats")
-    chats = app.wait_for("chats.txt", lambda: app.artifact("chats.txt"))
-    rows = [line.split("\t") for line in chats.splitlines()]
+    # The chats arrive with the updates of loadChats.
+    rows = app.wait_for("both chats", lambda: (r := app.chat_rows()) and len(r) == 2 and r)
     assert [r[:2] for r in rows] == [["1001", "Alice Example"], ["1002", "Bob Example"]], rows
     assert rows[0][2] == "1", f"Alice's chat has one unread message: {rows}"
 
-    app.action("auto-open-chat", "int64 1001")
+    app.open_chat(1001)
     state = app.wait_for(
         "the history of Alice's chat",
         lambda: (s := app.state()).get("open-chat", [None])[0] == "1001"
@@ -285,7 +312,7 @@ def test_login_with_phone_number(app):
 def test_survives_failing_view_messages(app):
     """TDLib may reject viewMessages; opening an unread chat must not crash."""
     app.wait_until_logged_in()
-    app.action("auto-open-chat", "int64 1001")
+    app.open_chat(1001)
     app.wait_for("the viewMessages request", lambda: app.requests("viewMessages"), 30)
     time.sleep(1)
     app.assert_alive()
@@ -309,7 +336,7 @@ def test_survives_unsupported_auth_state(app):
 
 def test_media_replies_reactions_and_permissions(app):
     app.wait_until_logged_in()
-    app.action("auto-open-chat", "int64 1003")
+    app.open_chat(1003)
     app.wait_for(
         "the history of Carol's chat",
         lambda: len(app.state()["messages"]) == 4,
@@ -361,7 +388,7 @@ def test_runs_in_the_background(app):
     application running without an open chat; activating it again shows the
     window and reopens the chat (5418fc72)."""
     app.wait_until_logged_in()
-    app.action("auto-open-chat", "int64 1001")
+    app.open_chat(1001)
     app.wait_for("the opened chat", lambda: app.requests("openChat"))
     opened = len(app.requests("openChat"))
 
@@ -400,7 +427,7 @@ def test_sending_reveals_the_message(app):
     """A message sent in a long chat with unread messages ends up in view at
     the bottom of the history, as in the official clients."""
     app.wait_until_logged_in()
-    app.action("auto-open-chat", "int64 1004")
+    app.open_chat(1004)
     app.wait_for(
         "the history of Dave's chat",
         lambda: (s := app.state()).get("open-chat", [None])[0] == "1004"
@@ -449,6 +476,7 @@ def main():
             test(app)
         except (Failure, AssertionError) as e:
             error = e or "assertion failed"
+        diagnostics = app.diagnostics() if error else ""
         log = app.close(args.artifacts)
         panics = [l for l in log.splitlines() if "panicked" in l]
         if panics and not error:
@@ -456,6 +484,8 @@ def main():
         if error:
             failed.append(name)
             print(f"FAIL {name}: {error}")
+            if diagnostics:
+                print(diagnostics)
             print("--- application log (tail)")
             print("\n".join(log.splitlines()[-40:]))
         else:
