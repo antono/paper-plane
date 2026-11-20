@@ -34,7 +34,6 @@ else
   message('Building in debug mode')
 endif
 
-
 cargo_env = [ 'CARGO_HOME=' + meson.project_build_root() / 'cargo-home' ]
 
 custom_target(
@@ -71,10 +70,10 @@ test (
     '-D',
     'warnings',
   ],
+  # PATH and LIBCLANG_PATH come from the environment (the build-options of
+  # the Flatpak manifest, or the Nix development shell).
   env: [
     'CARGO_HOME=@0@'.format(cargo_home),
-    'LIBCLANG_PATH=/usr/lib/sdk/llvm20/lib',
-    'PATH=/app/bin:/usr/bin:/usr/lib/sdk/rust-stable/bin',
   ],
   timeout: 300, # Give cargo more time
 )
@@ -115,8 +114,9 @@ test(
     'CARGO_HOME=@0@'.format(cargo_home),
     'PAPER_PLANE_RESOURCES=@0@'.format(meson.project_build_root() / 'data' / 'resources' / 'resources.gresource'),
     'PAPER_PLANE_UI_RESOURCES=@0@'.format(meson.current_build_dir() / 'ui' / 'ui-resources.gresource'),
+    'PAPER_PLANE_SCHEMA_DIR=@0@'.format(meson.project_build_root() / 'data'),
   ],
-  depends: [resources, ui_resources],
+  depends: [resources, ui_resources, compiled_schemas],
   suite: 'ui',
   timeout: 1800,
 )

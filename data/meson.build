@@ -57,12 +57,20 @@ endif
 gschema_conf = configuration_data()
 gschema_conf.set('app-id', application_id)
 gschema_conf.set('gettext-package', gettext_package)
-configure_file(
+gschema_file = configure_file(
   input: '@0@.gschema.xml.in'.format(base_id),
   output: '@0@.gschema.xml'.format(application_id),
   configuration: gschema_conf,
   install: true,
   install_dir: datadir / 'glib-2.0' / 'schemas'
+)
+
+# Compiled schema of the build directory, used by the unit tests
+compiled_schemas = custom_target(
+  'compiled-schemas',
+  input: gschema_file,
+  output: 'gschemas.compiled',
+  command: [glib_compile_schemas, '--strict', '--targetdir', meson.current_build_dir(), meson.current_build_dir()],
 )
 
 # Validate GSchema
