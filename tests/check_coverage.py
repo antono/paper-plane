@@ -91,6 +91,12 @@ def main():
             if not ok:
                 problems.append(f"{feature}: {test} did not run or failed")
 
+    # Every row is backed by at least one mutation in tests/mutations.py
+    mutated = set(re.findall(r"\b[0-9a-f]{8}\b", (ROOT / "tests/mutations.py").read_text()))
+    for commits, feature, _ in table():
+        if not mutated.intersection(commits):
+            problems.append(f"{feature}: no mutation in tests/mutations.py")
+
     merge = git("log", "--merges", "--format=%h", "--abbrev=8", "--grep=vitlav/next", "-1").strip()
     merged_range = args.merged or f"origin/main..{merge}"
     for line in git("log", "--no-merges", "--format=%h %s", "--abbrev=8", merged_range).splitlines():

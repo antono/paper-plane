@@ -7,8 +7,10 @@ merged commit (except translations, CI and docs) must be listed.
 
 That shows the tests ran, not that they test the feature. `tests/mutations.py`
 does: for every feature it breaks the merged code (a small, compiling partial
-revert of the commit) and requires the listed test to fail. On 2026-11-20 all
-37 mutations (24 unit/GTK, 9 packaging, 4 end-to-end) were caught.
+revert of the commit) and requires the listed test to fail; every row of the
+table has at least one mutation (check_coverage.py checks that too). On
+2026-11-20 all 44 mutations (27 unit/GTK, 9 packaging, 1 validate-ui, 2 the
+build refuses, 5 end-to-end) were caught.
 
 Test kinds:
 

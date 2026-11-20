@@ -15,6 +15,7 @@ dbus-run-session, gdbus). Every file is restored afterwards.
 
 import argparse
 import os
+import re
 import pathlib
 import subprocess
 import sys
@@ -23,7 +24,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # (commit, feature, file, original, mutated, expected failure)
 # The expected failure is "unit:<test path>", "gtk" (ui::tests::gtk),
-# "pack:<check>" (build-aux/check-packaging.py) or "e2e:<test name>".
+# "pack:<check>" (build-aux/check-packaging.py), "meson:<test>", "build"
+# (the build must refuse it) or "e2e:<test name>". The commit field may
+# name several commits that the mutation covers.
 MUTATIONS = [
     ("f966e155", "voice notes: waveform", "src/ui/components/waveform.rs",
      "let decoded = glib::base64_decode(waveform);",
@@ -135,7 +138,33 @@ MUTATIONS = [
      '    <key name="run-in-background" type="b">',
      '    <key name="autoplay-videos" type="b"><default>false</default></key>\n    <key name="run-in-background" type="b">',
      "pack:the removed autoplay setting left nothing behind"),
+    ("c262fb70 7d2956af 3e9f575c 1f2840ca", "Session is an Adw.Bin (caught by the template test)",
+     "src/ui/session/mod.blp", "template $Session : Adw.Bin {", "template $Session : Gtk.Box {",
+     "gtk"),
+    ("c1eecd89", "video playback in the media viewer", "src/ui/session/playback_manager.rs",
+     "        media.set_filename(Some(path));\n", "",
+     "gtk"),
+    ("18721f28 788ffd24 b9295d01 e29b724f", "login links are buttons", "src/ui/login/phone_number.blp",
+     '          Button {\n            margin-top: 12;\n            action-name: "login.phone-number.use-qr-code";\n'
+     '            label: _("Quick login using QR code");\n            styles ["link"]\n',
+     '          LinkButton {\n            margin-top: 12;\n            action-name: "login.phone-number.use-qr-code";\n'
+     '            label: _("Quick login using QR code");\n',
+     "meson:validate-ui"),
+    ("52b9fba2", "merge: secret chat property in the history", "src/ui/session/content/chat_history.rs",
+     "self.set_is_secret_chat(matches!(chat.chat_type(), model::ChatType::Secret(_)));",
+     "self.set_is_secret_chat(false);",
+     "gtk"),
+    ("ffae468a dc8fb1cb", "API generated from the schema of the system TDLib", "tdlib-rs/build.rs",
+     'let file = format!("tl/api_{version}.tl");', 'let file = format!("tl/api_{version}.missing.tl");',
+     "build"),
+    ("c7e6d966 6a322b1f 36d4c5ef 4bbbf7ec", "built against TDLib 1.8.65", "meson.build",
+     "dependency('tdjson', version: '>= 1.8.65')", "dependency('tdjson', version: '>= 1.8.66')",
+     "build"),
     # End to end
+    ("1e1e3ad7 eabdee5b ecdbe0b9 3430fb73 71583b69", "tdlib-rs requests and responses",
+     "tdlib-rs/src/lib.rs",
+     '    request["@extra"] = serde_json::to_value(extra).unwrap();\n', "",
+     "e2e:chat-list-open-and-send"),
     ("78359245", "message loading around the anchor (e2e)", "src/model/chat_history_model.rs",
      "let anchor = if chat.unread_count() > 0 {", "let anchor = if chat.unread_count() < 0 {",
      "e2e:chat-list-open-and-send"),
@@ -167,6 +196,20 @@ def pack_failure(build, check):
     if f"FAIL {check}" in log:
         return True, log
     return None, log
+
+
+def meson_failure(build, test):
+    run(["meson", "test", "-C", build, test])
+    log = (pathlib.Path(build) / "meson-logs/testlog.txt").read_text(errors="replace")
+    if f":{test}\n" not in log:
+        return None, log
+    passed = re.search(rf"^test:\s+.*:{re.escape(test)}\n(?:.*\n){{0,3}}?result:\s+exit status 0$", log, re.M)
+    return passed is None, log
+
+
+def build_refused(build):
+    result = run(["meson", "compile", "-C", build])
+    return result.returncode != 0, result.stdout + result.stderr
 
 
 def unit_failures(build):
@@ -224,6 +267,12 @@ def main():
             if is_e2e:
                 failed, log = e2e_failure(args, expected[4:])
                 detail = expected
+            elif expected.startswith("meson:"):
+                failed, log = meson_failure(args.build, expected[6:])
+                detail = expected
+            elif expected == "build":
+                failed, log = build_refused(args.build)
+                detail = "the build"
             elif expected.startswith("pack:"):
                 failed, log = pack_failure(args.build, expected[5:])
                 detail = expected
