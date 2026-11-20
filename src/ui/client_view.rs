@@ -91,3 +91,32 @@ impl ClientView {
             .bind(&*self.imp().bin, "child", Some(self));
     }
 }
+
+/// Checks of the client view that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use adw::prelude::*;
+
+    use crate::model::test_support::*;
+
+    eprintln!("client view while logging out and closing");
+
+    isolated(|| {
+        let client = client();
+        let view = ClientView::from(&client);
+        assert!(view.imp().bin.child().and_downcast::<ui::Login>().is_some());
+
+        // TDLib closing the client (log out, quit) used to panic here
+        // (vitlav e37f1b81); the view shows a spinner instead.
+        client.handle_update(tdlib::enums::Update::AuthorizationState(
+            tdlib::types::UpdateAuthorizationState {
+                authorization_state: tdlib::enums::AuthorizationState::Closing,
+            },
+        ));
+        assert!(client
+            .state()
+            .and_downcast::<model::ClientStateLoggingOut>()
+            .is_some());
+        assert!(view.imp().bin.child().and_downcast::<adw::Spinner>().is_some());
+    });
+}

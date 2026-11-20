@@ -63,9 +63,9 @@ pub(crate) fn user(id: i64) -> types::User {
     }
 }
 
-/// A session of the user [`ME`] that is fed by hand.
-pub(crate) fn session() -> model::ClientStateSession {
-    let client: model::Client = glib::Object::builder()
+/// A client without a client manager; its state starts as `ClientStateAuth`.
+pub(crate) fn client() -> model::Client {
+    glib::Object::builder()
         .property("remove-if-auth", false)
         .property("id", 0)
         .property(
@@ -75,8 +75,12 @@ pub(crate) fn session() -> model::ClientStateSession {
                 use_test_dc: true,
             }),
         )
-        .build();
+        .build()
+}
 
+/// A session of the user [`ME`] that is fed by hand.
+pub(crate) fn session() -> model::ClientStateSession {
+    let client = client();
     let session = model::ClientStateSession::new(&client, user(ME));
     // The session refers to its client weakly; in the application the client
     // manager owns it. Here the session keeps it alive.

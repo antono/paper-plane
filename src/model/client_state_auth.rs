@@ -120,3 +120,51 @@ impl ClientStateAuth {
         self.set_state(Some(state));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gtk::glib::prelude::*;
+    use tdlib::enums::AuthorizationState;
+    use tdlib::types;
+
+    use crate::model;
+    use crate::model::test_support::*;
+
+    fn state_name(auth: &model::ClientStateAuth) -> String {
+        auth.state()
+            .map(|s| s.type_().name().to_owned())
+            .unwrap_or_default()
+    }
+
+    fn update(auth: &model::ClientStateAuth, state: AuthorizationState) {
+        auth.handle_update(types::UpdateAuthorizationState {
+            authorization_state: state,
+        });
+    }
+
+    /// TDLib can ask for login steps Paper Plane does not implement (an
+    /// email address, a Premium purchase); the login keeps its page instead
+    /// of aborting the application (vitlav 74f246d0).
+    #[test]
+    fn unsupported_states_keep_the_current_page() {
+        isolated(|| {
+            let client = client();
+            let auth = client
+                .state()
+                .and_downcast::<model::ClientStateAuth>()
+                .expect("a new client starts with the login");
+
+            update(&auth, AuthorizationState::WaitPhoneNumber);
+            assert_eq!(state_name(&auth), "ClientStateAuthPhoneNumber");
+
+            update(
+                &auth,
+                AuthorizationState::WaitEmailAddress(types::AuthorizationStateWaitEmailAddress {
+                    allow_apple_id: false,
+                    allow_google_id: false,
+                }),
+            );
+            assert_eq!(state_name(&auth), "ClientStateAuthPhoneNumber");
+        });
+    }
+}

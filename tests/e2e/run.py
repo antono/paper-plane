@@ -221,7 +221,12 @@ def test_chat_list_open_and_send(app):
     )
     assert [m[0] for m in state["messages"]] == [3, 2, 1], state["messages"]
     assert app.requests("openChat"), "openChat was not requested"
-    assert app.requests("getChatHistory"), "getChatHistory was not requested"
+    # The chat has an unread message, so the history is loaded around the
+    # last read one (2), including newer messages (a negative offset), not
+    # from the end (the message loading of aleks-demin/next@78359245).
+    first = app.requests("getChatHistory")[0]["request"]
+    assert first["chat_id"] == 1001 and first["from_message_id"] == 2, first
+    assert first["offset"] < 0, first
 
     png = app.screenshot("chat")
     assert png.startswith(b"\x89PNG"), "the screenshot is not a PNG"

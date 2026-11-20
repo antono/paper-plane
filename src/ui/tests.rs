@@ -127,6 +127,8 @@ fn gtk() {
     waveform_widget();
     crate::application::gtk_check();
     crate::expressions::gtk_check();
+    super::client_view::gtk_check();
+    crate::utils::gtk_check();
     super::session::gtk_checks();
 }
 

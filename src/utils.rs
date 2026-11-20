@@ -334,3 +334,76 @@ pub(crate) fn unparent_children<W: IsA<gtk::Widget>>(widget: &W) {
         child_.unparent();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size(type_: &str, width: i32) -> tdlib::types::PhotoSize {
+        tdlib::types::PhotoSize {
+            r#type: type_.to_owned(),
+            photo: tdlib::types::File {
+                id: width,
+                size: 0,
+                expected_size: 0,
+                local: tdlib::types::LocalFile {
+                    path: String::new(),
+                    can_be_downloaded: true,
+                    can_be_deleted: false,
+                    is_downloading_active: false,
+                    is_downloading_completed: false,
+                    download_offset: 0,
+                    downloaded_prefix_size: 0,
+                    downloaded_size: 0,
+                },
+                remote: tdlib::types::RemoteFile {
+                    id: String::new(),
+                    unique_id: String::new(),
+                    is_uploading_active: false,
+                    is_uploading_completed: true,
+                    uploaded_size: 0,
+                },
+            },
+            width,
+            height: width,
+            progressive_sizes: vec![],
+        }
+    }
+
+    fn picked(sizes: &[tdlib::types::PhotoSize], scale: i32) -> Option<String> {
+        photo_size_for_scale_factor(sizes, scale).map(|s| s.r#type)
+    }
+
+    #[test]
+    fn photo_sizes_for_scale_factors() {
+        let sizes = [size("m", 320), size("x", 800), size("y", 1280), size("w", 2560)];
+        assert_eq!(picked(&sizes, 1).as_deref(), Some("x"));
+        assert_eq!(picked(&sizes, 2).as_deref(), Some("y"));
+        assert_eq!(picked(&sizes, 3).as_deref(), Some("w"));
+
+        // Without the wanted type, the largest size is used.
+        let small = [size("s", 90), size("m", 320)];
+        assert_eq!(picked(&small, 1).as_deref(), Some("m"));
+        assert_eq!(picked(&[], 1), None);
+    }
+}
+
+/// Checks of the media helpers that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    eprintln!("minithumbnail textures");
+
+    let pixels = glib::Bytes::from_owned(vec![255u8, 0, 0, 255]);
+    let png = gdk::MemoryTexture::new(1, 1, gdk::MemoryFormat::R8g8b8a8, &pixels, 4)
+        .save_to_png_bytes();
+    let minithumbnail = |data: String| tdlib::types::Minithumbnail {
+        width: 1,
+        height: 1,
+        data,
+    };
+
+    let texture = texture_from_minithumbnail(&minithumbnail(glib::base64_encode(&png).into()))
+        .expect("a valid image");
+    assert_eq!((texture.width(), texture.height()), (1, 1));
+    assert!(texture_from_minithumbnail(&minithumbnail("not an image".into())).is_none());
+}
