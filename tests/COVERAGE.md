@@ -5,6 +5,11 @@ that exercise it. `tests/check_coverage.py` checks this table against the
 logs of a test run: every listed test must have run and passed, and every
 merged commit (except translations, CI and docs) must be listed.
 
+That shows the tests ran, not that they test the feature. `tests/mutations.py`
+does: for every feature it breaks the merged code (a small, compiling partial
+revert of the commit) and requires the listed test to fail. On 2026-11-20 all
+28 mutations (24 unit/GTK, 4 end-to-end) were caught.
+
 Test kinds:
 
 - `unit:<path>`: a Rust unit test (`cargo test` output, `test <path> ... ok`).
