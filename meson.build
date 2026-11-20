@@ -40,10 +40,17 @@ tg_api_hash = get_option('tg_api_hash')
 
 if get_option('profile') == 'development'
   profile = 'Devel'
-  vcs_tag = 'r' \
-    + run_command('git', 'rev-list', '--count', 'HEAD').stdout().strip() \
-    + '.' \
-    + run_command('git', 'rev-parse', '--short', 'HEAD').stdout().strip()
+  # The revision, when building from a git checkout (not from a tarball or
+  # in a sandbox without git)
+  vcs_tag = ''
+  git = find_program('git', required: false)
+  if git.found()
+    count = run_command(git, 'rev-list', '--count', 'HEAD', check: false)
+    rev = run_command(git, 'rev-parse', '--short', 'HEAD', check: false)
+    if count.returncode() == 0 and rev.returncode() == 0
+      vcs_tag = 'r@0@.@1@'.format(count.stdout().strip(), rev.stdout().strip())
+    endif
+  endif
   if vcs_tag == ''
     version_suffix = '-devel'
   else
