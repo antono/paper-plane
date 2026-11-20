@@ -1,3 +1,7 @@
+// GskGLShader is deprecated since GTK 4.16 without a replacement. It only
+// renders with the GL renderer, which the Flatpak selects (see #631).
+#![allow(deprecated)]
+
 use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;

@@ -254,6 +254,7 @@ impl MediaVideoTile {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update_media(
         &self,
         session: &model::ClientStateSession,

@@ -455,7 +455,7 @@ impl Row {
             .content
             .borrow()
             .as_ref()
-            .and_then(|content| find_message_label(content));
+            .and_then(find_message_label);
 
         let Some(label) = label else {
             return;

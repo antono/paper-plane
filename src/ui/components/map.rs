@@ -9,7 +9,9 @@ use shumate::prelude::*;
 use crate::ui;
 use crate::utils;
 
-// The golden ratio
+// The golden ratio (std::f64::consts::GOLDEN_RATIO is newer than the
+// Rust of the supported SDKs)
+#[allow(clippy::approx_constant)]
 const PHI: f64 = 1.6180339887;
 const MIN_HEIGHT: i32 = 150;
 const MAX_HEIGHT: i32 = 225;

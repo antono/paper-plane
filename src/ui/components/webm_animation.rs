@@ -169,7 +169,9 @@ unsafe fn convert_image(image: &vpx_sys::vpx_image) -> Result<Option<DecodedFram
         let v_row = std::slice::from_raw_parts(v_plane.add(row / 2 * v_stride), width / 2 + 1);
 
         for (pixel, col) in rgba[row * width * 4..(row + 1) * width * 4]
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(0..width)
         {
             let y = y_row[col] as i32;
