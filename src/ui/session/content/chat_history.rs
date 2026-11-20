@@ -623,7 +623,17 @@ impl ChatHistory {
                             // paint happens after a single TDLib request
                             let mut limit = INITIAL_LOAD_LIMIT;
 
-                            while adj.value() == 0.0 {
+                            // Load until the messages fill the view. (This
+                            // used to wait for the value to leave 0, which only
+                            // happened with the reversed list view of the
+                            // patched GTK; with a plain list view 0 is the top
+                            // and stays so, and the whole history was loaded.)
+                            loop {
+                                // Let the list lay out what is loaded.
+                                glib::timeout_future(std::time::Duration::from_millis(20)).await;
+                                if adj.upper() > adj.page_size() * 1.5 {
+                                    break;
+                                }
                                 let adj_value = adj.value();
                                 let adj_upper = adj.upper();
                                 let adj_page_size = adj.page_size();
@@ -664,6 +674,7 @@ impl ChatHistory {
                                 model.n_items(),
                             );
                             obj.set_sticky(true);
+                            obj.scroll_down();
                         } else {
                             log::debug!("Loading messages around the anchor");
                             obj.load_around_anchor(&model).await;
