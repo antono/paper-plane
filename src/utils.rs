@@ -197,9 +197,12 @@ pub(crate) fn temp_dir() -> Option<&'static PathBuf> {
     TEMP_DIR.get()
 }
 
-/// Spawn a future on the default `MainContext`
+/// Spawn a future on the thread-default `MainContext`
 pub(crate) fn spawn<F: Future<Output = ()> + 'static>(fut: F) {
-    let ctx = glib::MainContext::default();
+    // The thread-default context is the global default one in the
+    // application; unit tests push their own one (see
+    // `model::test_support::isolated`).
+    let ctx = glib::MainContext::ref_thread_default();
     ctx.spawn_local(fut);
 }
 
