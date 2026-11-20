@@ -5,6 +5,7 @@
 //! objects are fed with the same `Update`s that TDLib would send.
 
 use gtk::glib;
+use gtk::glib::prelude::*;
 use tdlib::enums;
 use tdlib::types;
 
@@ -76,7 +77,11 @@ pub(crate) fn session() -> model::ClientStateSession {
         )
         .build();
 
-    model::ClientStateSession::new(&client, user(ME))
+    let session = model::ClientStateSession::new(&client, user(ME));
+    // The session refers to its client weakly; in the application the client
+    // manager owns it. Here the session keeps it alive.
+    unsafe { session.set_data("test-client", client) };
+    session
 }
 
 fn permissions() -> types::ChatPermissions {

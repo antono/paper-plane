@@ -115,6 +115,10 @@ test(
     'PAPER_PLANE_RESOURCES=@0@'.format(meson.project_build_root() / 'data' / 'resources' / 'resources.gresource'),
     'PAPER_PLANE_UI_RESOURCES=@0@'.format(meson.current_build_dir() / 'ui' / 'ui-resources.gresource'),
     'PAPER_PLANE_SCHEMA_DIR=@0@'.format(meson.project_build_root() / 'data'),
+    # Widgets that read the settings find the schema of the build directory,
+    # and nothing is written to the settings of the user.
+    'GSETTINGS_SCHEMA_DIR=@0@'.format(meson.project_build_root() / 'data'),
+    'GSETTINGS_BACKEND=memory',
   ],
   depends: [resources, ui_resources, compiled_schemas],
   suite: 'ui',

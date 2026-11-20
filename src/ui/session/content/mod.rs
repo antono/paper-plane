@@ -171,4 +171,5 @@ impl Content {
 pub(crate) fn gtk_checks() {
     message_row::gtk_checks();
     media_viewer_page::gtk_check();
+    media_viewer::gtk_check();
 }

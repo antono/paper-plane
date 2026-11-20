@@ -961,3 +961,53 @@ mod tests {
         });
     }
 }
+
+/// Checks of the media viewer that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("media viewer: open an album, close");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let history = model::ChatHistoryModel::new(&chat);
+        for id in 1..=3 {
+            new_message(&session, message(ME, id, DAY, 77, photo("")));
+        }
+        new_message(&session, message(ME, 4, DAY, 0, text("not media")));
+
+        let album = chat.message(1).unwrap().media_album().unwrap();
+        let entries: Vec<ViewerEntry> = album
+            .messages()
+            .iter()
+            .filter_map(|message| {
+                ViewerItem::from_message(message).map(|item| ViewerEntry {
+                    item,
+                    message_id: message.id(),
+                })
+            })
+            .collect();
+        assert_eq!(entries.len(), 3);
+
+        let viewer: MediaViewer = glib::Object::new();
+        let source = gtk::Picture::new();
+        viewer.open(&source, &chat, entries, 1);
+
+        let imp = viewer.imp();
+        assert!(viewer.is_visible());
+        assert!(!imp.closed.get());
+        assert_eq!(imp.entries.borrow().len(), 3);
+        assert_eq!(imp.active_index.get(), 1);
+        let active = imp.pages.borrow()[1].clone();
+        assert!(active.is_some(), "the page of the opened photo exists");
+
+        viewer.close();
+        assert!(imp.closed.get());
+        // Closing twice is harmless.
+        viewer.close();
+
+        drop(history);
+    });
+}
