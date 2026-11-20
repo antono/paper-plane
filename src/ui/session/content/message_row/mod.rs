@@ -648,6 +648,8 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
 /// The checks of the message rows that need GTK, see `ui::tests`.
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
+    label::gtk_check();
+
     eprintln!("message label lookup for Copy Text");
 
     // The text of a message is found wherever its label sits in the

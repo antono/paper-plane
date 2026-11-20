@@ -345,3 +345,37 @@ impl Avatar {
         self.notify("size");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    /// The id of Telegram's "Replies" service account and chat.
+    const REPLIES: i64 = 1271266957;
+
+    #[test]
+    fn appearance_of_special_chats() {
+        isolated(|| {
+            let session = session();
+
+            let saved = add_chat(&session, ME);
+            let appearance = appearance_for_chat(&saved);
+            assert_eq!(appearance.icon_name, Some("user-bookmarks-symbolic"));
+            assert!(!appearance.show_initials);
+
+            add_user(&session, REPLIES);
+            let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
+            let appearance = appearance_for_chat(&replies);
+            assert_eq!(appearance.icon_name, Some("mail-reply-sender-symbolic"));
+            assert!(!appearance.show_initials);
+
+            add_user(&session, 42);
+            let alice = add_private_chat(&session, 42, 42, "Alice");
+            let appearance = appearance_for_chat(&alice);
+            assert_eq!(appearance.icon_name, None);
+            assert_eq!(appearance.text.as_deref(), Some("Alice"));
+            assert!(appearance.show_initials);
+        });
+    }
+}

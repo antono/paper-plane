@@ -266,3 +266,34 @@ impl MessageLabel {
         }
     }
 }
+
+/// Checks of Select and Copy Text that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    eprintln!("message label text selection");
+
+    let label: MessageLabel = glib::Object::new();
+    label.set_label("Hello <b>wide</b> world".to_owned());
+    assert_eq!(
+        label.plain_text(),
+        "Hello wide world",
+        "markup is not copied"
+    );
+    assert_eq!(label.selected_text(), None);
+
+    label.imp().label.select_region(6, 10);
+    assert_eq!(label.selected_text().as_deref(), Some("wide"));
+
+    // The indicators (time, ticks) sit on an object replacement character,
+    // which must not end up in the clipboard.
+    let indicators: ui::MessageIndicators = glib::Object::new();
+    label.set_indicators(Some(indicators));
+    assert!(!label.plain_text().contains(OBJECT_REPLACEMENT_CHARACTER));
+    assert!(label.plain_text().starts_with("Hello wide world"));
+    let length = label.imp().label.text().chars().count() as i32;
+    label.imp().label.select_region(0, length);
+    assert_eq!(
+        label.selected_text().as_deref().map(str::trim_end),
+        Some("Hello wide world")
+    );
+}

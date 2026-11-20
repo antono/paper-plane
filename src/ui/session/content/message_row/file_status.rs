@@ -35,3 +35,65 @@ impl From<&File> for FileStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tdlib::types::LocalFile;
+    use tdlib::types::RemoteFile;
+
+    use super::*;
+
+    fn file() -> File {
+        File {
+            id: 1,
+            size: 1000,
+            expected_size: 1000,
+            local: LocalFile {
+                path: String::new(),
+                can_be_downloaded: true,
+                can_be_deleted: false,
+                is_downloading_active: false,
+                is_downloading_completed: false,
+                download_offset: 0,
+                downloaded_prefix_size: 0,
+                downloaded_size: 0,
+            },
+            remote: RemoteFile {
+                id: String::new(),
+                unique_id: String::new(),
+                is_uploading_active: false,
+                is_uploading_completed: true,
+                uploaded_size: 1000,
+            },
+        }
+    }
+
+    #[test]
+    fn statuses_of_files() {
+        assert_eq!(FileStatus::from(&file()), CanBeDownloaded);
+
+        let mut downloading = file();
+        downloading.local.is_downloading_active = true;
+        downloading.local.downloaded_size = 250;
+        assert_eq!(FileStatus::from(&downloading), Downloading(0.25));
+
+        let mut uploading = file();
+        uploading.remote.is_uploading_active = true;
+        uploading.remote.uploaded_size = 500;
+        assert_eq!(FileStatus::from(&uploading), Uploading(0.5));
+
+        let mut downloaded = file();
+        downloaded.local.is_downloading_completed = true;
+        assert_eq!(FileStatus::from(&downloaded), Downloaded);
+    }
+
+    #[test]
+    fn progress_uses_the_expected_size_when_the_size_is_unknown() {
+        let mut downloading = file();
+        downloading.size = 0;
+        downloading.expected_size = 2000;
+        downloading.local.is_downloading_active = true;
+        downloading.local.downloaded_size = 500;
+        assert_eq!(FileStatus::from(&downloading), Downloading(0.25));
+    }
+}

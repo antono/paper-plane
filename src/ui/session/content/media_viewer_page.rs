@@ -410,3 +410,16 @@ impl MediaViewerPage {
         }
     }
 }
+
+/// Checks of the media viewer page that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    eprintln!("media viewer page: video graphics offload");
+
+    let page: MediaViewerPage = glib::Object::new();
+    assert_eq!(
+        page.imp().video.graphics_offload(),
+        gtk::GraphicsOffloadEnabled::Enabled,
+        "videos in the viewer are offloaded to the compositor"
+    );
+}

@@ -95,3 +95,110 @@ fn extract_reactions(
             .unwrap_or_default(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use tdlib::enums;
+    use tdlib::types;
+
+    use crate::model;
+    use crate::model::test_support::*;
+
+    const CHAT: i64 = ME;
+
+    fn interaction_info(reactions: &[(&str, i32, bool)]) -> Option<types::MessageInteractionInfo> {
+        Some(types::MessageInteractionInfo {
+            view_count: 0,
+            forward_count: 0,
+            reply_info: None,
+            reactions: Some(types::MessageReactions {
+                reactions: reactions
+                    .iter()
+                    .map(|&(emoji, total_count, is_chosen)| types::MessageReaction {
+                        r#type: enums::ReactionType::Emoji(types::ReactionTypeEmoji {
+                            emoji: emoji.to_owned(),
+                        }),
+                        total_count,
+                        is_chosen,
+                        used_sender_id: None,
+                        recent_sender_ids: vec![],
+                    })
+                    .collect(),
+                are_tags: false,
+                paid_reactors: vec![],
+                can_get_added_reactions: false,
+            }),
+        })
+    }
+
+    fn summary(message: &model::Message) -> Vec<(String, i32, bool)> {
+        message
+            .interaction_info()
+            .reactions()
+            .0
+            .iter()
+            .map(|r| match &r.r#type {
+                enums::ReactionType::Emoji(e) => (e.emoji.clone(), r.total_count, r.is_chosen),
+                _ => (String::new(), r.total_count, r.is_chosen),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reactions_of_new_messages_and_updates() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, CHAT);
+            let _history = model::ChatHistoryModel::new(&chat);
+
+            let mut td_message = message(CHAT, 1, DAY, 0, text("react to me"));
+            td_message.interaction_info = interaction_info(&[("👍", 2, true)]);
+            new_message(&session, td_message);
+            let message = chat.message(1).unwrap();
+            assert_eq!(summary(&message), [("👍".to_owned(), 2, true)]);
+
+            let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+            message
+                .interaction_info()
+                .connect_reactions_notify(gtk::glib::clone!(
+                    #[strong]
+                    notified,
+                    move |_| notified.set(notified.get() + 1)
+                ));
+
+            // updateMessageInteractionInfo reaches the message through the
+            // session and the chat.
+            session.handle_update(enums::Update::MessageInteractionInfo(
+                types::UpdateMessageInteractionInfo {
+                    chat_id: CHAT,
+                    message_id: 1,
+                    interaction_info: interaction_info(&[("👍", 1, false), ("🔥", 3, false)]),
+                },
+            ));
+            assert_eq!(
+                summary(&message),
+                [("👍".to_owned(), 1, false), ("🔥".to_owned(), 3, false)]
+            );
+            assert_eq!(notified.get(), 1);
+
+            // The same reactions again do not notify.
+            session.handle_update(enums::Update::MessageInteractionInfo(
+                types::UpdateMessageInteractionInfo {
+                    chat_id: CHAT,
+                    message_id: 1,
+                    interaction_info: interaction_info(&[("👍", 1, false), ("🔥", 3, false)]),
+                },
+            ));
+            assert_eq!(notified.get(), 1);
+
+            session.handle_update(enums::Update::MessageInteractionInfo(
+                types::UpdateMessageInteractionInfo {
+                    chat_id: CHAT,
+                    message_id: 1,
+                    interaction_info: None,
+                },
+            ));
+            assert!(summary(&message).is_empty());
+        });
+    }
+}

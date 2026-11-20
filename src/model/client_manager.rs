@@ -81,10 +81,7 @@ mod imp {
                     // apart: with --test-dc only the test sessions are loaded, without it only
                     // the production ones.
                     let test_dc = APPLICATION_OPTS.get().unwrap().test_dc;
-                    let database_infos = database_infos
-                        .into_iter()
-                        .filter(|database_info| database_info.use_test_dc == test_dc)
-                        .collect::<Vec<_>>();
+                    let database_infos = sessions_of_dc(database_infos, test_dc);
 
                     if database_infos.is_empty() {
                         obj.add_new_client(APPLICATION_OPTS.get().unwrap().test_dc);
@@ -320,7 +317,12 @@ impl ClientManager {
 
         let context = glib::MainContext::default();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while imp.1.borrow().as_ref().is_some_and(|closing| !closing.is_empty()) {
+        while imp
+            .1
+            .borrow()
+            .as_ref()
+            .is_some_and(|closing| !closing.is_empty())
+        {
             if Instant::now() >= deadline {
                 log::warn!("Timed out waiting for TDLib clients to close");
                 break;
@@ -419,5 +421,47 @@ fn generate_database_dir_base_name() -> String {
             .unwrap()
     } else {
         database_dir_base_name
+    }
+}
+
+/// The sessions of the test data centers or of the production ones.
+fn sessions_of_dc(
+    database_infos: Vec<model::DatabaseInfo>,
+    test_dc: bool,
+) -> Vec<model::DatabaseInfo> {
+    database_infos
+        .into_iter()
+        .filter(|database_info| database_info.use_test_dc == test_dc)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(name: &str, use_test_dc: bool) -> model::DatabaseInfo {
+        model::DatabaseInfo {
+            directory_base_name: name.to_owned(),
+            use_test_dc,
+        }
+    }
+
+    fn names(infos: Vec<model::DatabaseInfo>) -> Vec<String> {
+        infos.into_iter().map(|i| i.directory_base_name).collect()
+    }
+
+    #[test]
+    fn test_dc_sessions_are_kept_apart() {
+        let all = vec![
+            info("prod-1", false),
+            info("test-1", true),
+            info("prod-2", false),
+        ];
+        assert_eq!(
+            names(sessions_of_dc(all.clone(), false)),
+            ["prod-1", "prod-2"]
+        );
+        assert_eq!(names(sessions_of_dc(all, true)), ["test-1"]);
+        assert!(sessions_of_dc(vec![info("prod", false)], true).is_empty());
     }
 }

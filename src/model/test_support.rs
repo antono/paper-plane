@@ -123,10 +123,26 @@ fn notification_settings() -> types::ChatNotificationSettings {
 
 /// Adds the private chat with [`ME`] (the Saved Messages) to the session.
 pub(crate) fn add_chat(session: &model::ClientStateSession, id: ChatId) -> model::Chat {
+    add_private_chat(session, id, ME, "Saved Messages")
+}
+
+/// Adds a user to the session.
+pub(crate) fn add_user(session: &model::ClientStateSession, id: i64) {
+    session.handle_update(enums::Update::User(types::UpdateUser { user: user(id) }));
+}
+
+/// Adds the private chat with the user `user_id`, who must be known to the
+/// session (see [`add_user`]).
+pub(crate) fn add_private_chat(
+    session: &model::ClientStateSession,
+    id: ChatId,
+    user_id: i64,
+    title: &str,
+) -> model::Chat {
     let chat = types::Chat {
         id,
-        r#type: enums::ChatType::Private(types::ChatTypePrivate { user_id: ME }),
-        title: "Saved Messages".to_owned(),
+        r#type: enums::ChatType::Private(types::ChatTypePrivate { user_id }),
+        title: title.to_owned(),
         photo: None,
         accent_color_id: 0,
         background_custom_emoji_id: 0,
