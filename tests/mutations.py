@@ -211,6 +211,13 @@ MUTATIONS = [
      "            let Some(chat) = self.chat() else {\n                return;\n            };",
      "            let chat = self.chat().unwrap();",
      "gtk"),
+    ("78359245", "sending while not at the newest shows the newest", "src/ui/session/content/chat_history.rs",
+     "                            obj.go_to_newest();\n", "",
+     "gtk"),
+    ("78359245", "go_to_newest goes to the newest", "src/ui/session/content/chat_history.rs",
+     "let model = model::ChatHistoryModel::new_at_newest(&chat);",
+     "let model = model::ChatHistoryModel::new(&chat);",
+     "gtk"),
     # End to end, found untested by the review
     ("7679e134", "downloads reach the waiting widgets (e2e)", "src/model/client_state_session.rs",
      ".retain(|sender| sender.send_blocking(file.clone()).is_ok());",
