@@ -218,10 +218,11 @@ impl ChatHistoryModel {
 
         log::debug!("load_older_messages: from_message_id = {from_message_id}, limit = {limit}");
 
+        let chat = self.try_chat()?;
+
         imp.is_loading_older.set(true);
 
-        let result = self
-            .chat()
+        let result = chat
             .get_chat_history(from_message_id, 0, limit)
             .await;
 
@@ -262,10 +263,11 @@ impl ChatHistoryModel {
             AROUND_NEWER_MESSAGES * 2,
         );
 
+        let chat = self.try_chat()?;
+
         imp.is_loading_older.set(true);
 
-        let result = self
-            .chat()
+        let result = chat
             .get_chat_history(anchor, -AROUND_NEWER_MESSAGES, AROUND_NEWER_MESSAGES * 2)
             .await;
 
@@ -276,7 +278,7 @@ impl ChatHistoryModel {
         // The chat's last message is the newest one, so if we loaded it, all
         // the messages newer than the anchor are loaded.
         let reached_newest =
-            self.chat().last_message().map(|m| m.id()) == messages.first().map(|m| m.id());
+            self.try_chat()?.last_message().map(|m| m.id()) == messages.first().map(|m| m.id());
 
         if !messages.is_empty() {
             let count = messages.len();
@@ -288,7 +290,7 @@ impl ChatHistoryModel {
         // message with the id `anchor` itself.
         if self.find_message_position(anchor).is_none() {
             let message = self
-                .chat()
+                .try_chat()?
                 .fetch_message(anchor)
                 .await
                 .map_err(ChatHistoryError::Tdlib)?;
@@ -344,10 +346,11 @@ impl ChatHistoryModel {
             "load_newer_messages: newest_message_id = {newest_message_id}, limit = {limit}"
         );
 
+        let chat = self.try_chat()?;
+
         imp.is_loading_newer.set(true);
 
-        let result = self
-            .chat()
+        let result = chat
             .get_chat_history(newest_message_id, -limit, limit + 1)
             .await;
 
@@ -374,7 +377,7 @@ impl ChatHistoryModel {
         // of waiting for a load that returns nothing, which only a further
         // scroll would trigger.
         let reached_newest = self
-            .chat()
+            .try_chat()?
             .last_message()
             .is_some_and(|last| messages.iter().any(|m| m.id() >= last.id()));
 
@@ -907,7 +910,7 @@ impl ChatHistoryModel {
     pub(crate) fn find_message_position(&self, message_id: MessageId) -> Option<u32> {
         // Every message in the list is also alive in the message cache of the
         // chat, so we can use it to compare against the day dividers.
-        let message = self.chat().message(message_id)?;
+        let message = self.imp().chat.upgrade()?.message(message_id)?;
 
         let list = self.imp().list.borrow();
 
@@ -969,8 +972,15 @@ impl ChatHistoryModel {
         self.imp().at_newest.get()
     }
 
-    pub(crate) fn chat(&self) -> model::Chat {
-        self.imp().chat.upgrade().unwrap()
+    /// The chat, or an error if it was dropped while a load was in flight
+    /// (the chat was closed or the session ended).
+    fn try_chat(&self) -> Result<model::Chat, ChatHistoryError> {
+        self.imp().chat.upgrade().ok_or_else(|| {
+            ChatHistoryError::Tdlib(tdlib::types::Error {
+                code: 500,
+                message: "The chat of the history is gone".to_owned(),
+            })
+        })
     }
 }
 
@@ -1033,6 +1043,33 @@ mod tests {
                 Some((message.id(), members))
             })
             .collect()
+    }
+
+    #[test]
+    fn loads_fail_without_a_panic_once_the_chat_is_gone() {
+        isolated(|| {
+            let f = Fixture::new();
+            f.text(1);
+            let model = ChatHistoryModel::new(&f.chat);
+            let chat = f.chat.downgrade();
+            drop(f);
+            assert!(chat.upgrade().is_none(), "the chat outlived its session");
+
+            let context = glib::MainContext::ref_thread_default();
+            assert!(matches!(
+                context.block_on(model.load_older_messages(10)),
+                Err(ChatHistoryError::Tdlib(_))
+            ));
+            assert!(matches!(
+                context.block_on(model.load_newer_messages(10)),
+                Err(ChatHistoryError::Tdlib(_)) | Ok(false)
+            ));
+            assert!(matches!(
+                context.block_on(model.load_around_anchor()),
+                Err(ChatHistoryError::Tdlib(_))
+            ));
+            assert_eq!(model.find_message_position(1), None);
+        });
     }
 
     #[test]
