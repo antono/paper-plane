@@ -28,6 +28,10 @@ mod imp {
         pub(super) compact: Cell<bool>,
         #[template_child]
         pub(super) selection: TemplateChild<ui::SidebarSelection>,
+        #[template_child]
+        pub(super) scrolled_window: TemplateChild<gtk::ScrolledWindow>,
+        #[template_child]
+        pub(super) list_view: TemplateChild<gtk::ListView>,
     }
 
     #[glib::object_subclass]
@@ -138,4 +142,50 @@ mod imp {
 glib::wrapper! {
     pub(crate) struct ChatList(ObjectSubclass<imp::ChatList>)
         @extends gtk::Widget;
+}
+
+#[cfg(test)]
+impl ChatList {
+    fn new_for_test() -> Self {
+        glib::Object::new()
+    }
+}
+
+/// The list view scrolls itself, see `ui::tests`.
+///
+/// Inside a GtkScrolledWindow the chat list (not scrollable) got a
+/// GtkViewport, so the GtkListView had its own adjustment and did not know
+/// which rows were on screen: on a touch it dropped the widgets of rows that
+/// were still shown, leaving holes (seen on the phone).
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("chat list scrolls its list view directly");
+
+    isolated(|| {
+        let list = ChatList::new_for_test();
+        let imp = list.imp();
+
+        assert_eq!(
+            imp.list_view.parent().as_ref(),
+            Some(imp.scrolled_window.upcast_ref::<gtk::Widget>()),
+            "the list view must be the direct child of the scrolled window"
+        );
+        assert_eq!(
+            imp.list_view.vadjustment().as_ref(),
+            Some(&imp.scrolled_window.vadjustment()),
+            "the list view must scroll with the scrolled window"
+        );
+
+        // The sidebar must not wrap the chat list into another scrolled window
+        let sidebar = include_str!("mod.ui");
+        for part in sidebar.split(r#"class="GtkScrolledWindow""#).skip(1) {
+            let object = part.split("</object>").next().unwrap_or_default();
+            assert!(
+                !object.contains("PaplSidebarChatList"),
+                "a PaplSidebarChatList inside a GtkScrolledWindow in mod.ui"
+            );
+        }
+    });
 }

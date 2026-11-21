@@ -8,22 +8,26 @@
     <signal name="notify::chat-list" handler="on_notify_chat_list"/>
 
     <child>
-      <object class="GtkListView">
-        <property name="single-click-activate">True</property>
-        <signal name="activate" handler="list_activate" swapped="true"/>
-        <property name="model">
-          <object class="PaplSidebarSelection" id="selection">
-            <binding name="model">
-              <lookup name="chat-list">PaplSidebarChatList</lookup>
-            </binding>
-            <binding name="hide-selection">
-              <lookup name="compact">PaplSidebarChatList</lookup>
-            </binding>
-          </object>
-        </property>
-        <property name="factory">
-          <object class="GtkBuilderListItemFactory">
-            <property name="bytes"><![CDATA[
+      <object class="GtkScrolledWindow" id="scrolled_window">
+        <property name="hscrollbar-policy">never</property>
+
+        <child>
+          <object class="GtkListView" id="list_view">
+            <property name="single-click-activate">True</property>
+            <signal name="activate" handler="list_activate" swapped="true"/>
+            <property name="model">
+              <object class="PaplSidebarSelection" id="selection">
+                <binding name="model">
+                  <lookup name="chat-list">PaplSidebarChatList</lookup>
+                </binding>
+                <binding name="hide-selection">
+                  <lookup name="compact">PaplSidebarChatList</lookup>
+                </binding>
+              </object>
+            </property>
+            <property name="factory">
+              <object class="GtkBuilderListItemFactory">
+                <property name="bytes"><![CDATA[
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
   <template class="GtkListItem">
@@ -36,12 +40,15 @@
     </property>
   </template>
 </interface>
-            ]]></property>
+                ]]></property>
+              </object>
+            </property>
+            <style>
+              <class name="navigation-sidebar"/>
+            </style>
           </object>
-        </property>
-        <style>
-          <class name="navigation-sidebar"/>
-        </style>
+        </child>
+
       </object>
     </child>
 
