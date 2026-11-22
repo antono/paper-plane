@@ -13,6 +13,8 @@ use gtk::CompositeTemplate;
 
 use super::super::playback_manager;
 use super::media_viewer_page::MediaViewerPage;
+use super::media_viewer_page::MAX_ZOOM;
+use super::media_viewer_page::ZOOM_STEP;
 use crate::model;
 use crate::types::MessageId;
 use crate::ui::ScaleRevealer;
@@ -221,6 +223,11 @@ mod imp {
         pub(super) previous_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub(super) next_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub(super) zoom_box: TemplateChild<gtk::Box>,
+        /// The page whose zoom the buttons follow, with its handler.
+        pub(super) zoom_handler:
+            RefCell<Option<(glib::WeakRef<MediaViewerPage>, glib::SignalHandlerId)>>,
         /// The session this viewer belongs to.
         pub(super) session: glib::WeakRef<model::ClientStateSession>,
         /// The chat whose media is browsed by this viewer.
@@ -285,6 +292,34 @@ mod imp {
             klass.install_action("media-viewer.close", None, |viewer, _, _| {
                 viewer.close();
             });
+            klass.install_action("media-viewer.zoom-in", None, |viewer, _, _| {
+                viewer.zoom_active_page(Some(ZOOM_STEP));
+            });
+            klass.install_action("media-viewer.zoom-out", None, |viewer, _, _| {
+                viewer.zoom_active_page(Some(1.0 / ZOOM_STEP));
+            });
+            klass.install_action("media-viewer.zoom-reset", None, |viewer, _, _| {
+                viewer.zoom_active_page(None);
+            });
+            for key in [gdk::Key::plus, gdk::Key::equal, gdk::Key::KP_Add] {
+                klass.add_binding_action(
+                    key,
+                    gdk::ModifierType::CONTROL_MASK,
+                    "media-viewer.zoom-in",
+                );
+            }
+            for key in [gdk::Key::minus, gdk::Key::KP_Subtract] {
+                klass.add_binding_action(
+                    key,
+                    gdk::ModifierType::CONTROL_MASK,
+                    "media-viewer.zoom-out",
+                );
+            }
+            klass.add_binding_action(
+                gdk::Key::_0,
+                gdk::ModifierType::CONTROL_MASK,
+                "media-viewer.zoom-reset",
+            );
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -874,6 +909,49 @@ impl MediaViewer {
         self.maybe_preload(imp.active_index.get());
     }
 
+    /// Zooms the displayed photo by `factor`, or back to fit with `None`.
+    fn zoom_active_page(&self, factor: Option<f64>) {
+        let Some(page) = self.imp().active_page.upgrade() else {
+            return;
+        };
+        match factor {
+            Some(factor) => page.zoom_by(factor, None),
+            None => page.set_zoom(1.0, None),
+        }
+    }
+
+    /// Makes the zoom buttons and the carousel follow the zoom of `page`.
+    fn follow_zoom_of(&self, page: &MediaViewerPage) {
+        let imp = self.imp();
+        if let Some((old, handler)) = imp.zoom_handler.take() {
+            if let Some(old) = old.upgrade() {
+                old.disconnect(handler);
+            }
+        }
+        let handler = page.connect_notify_local(
+            Some("zoom"),
+            clone!(
+                #[weak(rename_to = obj)]
+                self,
+                move |page, _| obj.update_zoom_ui(page)
+            ),
+        );
+        imp.zoom_handler.replace(Some((page.downgrade(), handler)));
+        self.update_zoom_ui(page);
+    }
+
+    /// Shows the zoom buttons for photos, and keeps the carousel from
+    /// swiping while a photo is zoomed in, so that dragging scrolls it.
+    fn update_zoom_ui(&self, page: &MediaViewerPage) {
+        let imp = self.imp();
+        let zoom = page.zoom();
+        imp.zoom_box.set_visible(page.can_zoom());
+        self.action_set_enabled("media-viewer.zoom-in", page.can_zoom() && zoom < MAX_ZOOM);
+        self.action_set_enabled("media-viewer.zoom-out", zoom > 1.0);
+        self.action_set_enabled("media-viewer.zoom-reset", zoom > 1.0);
+        imp.carousel.set_interactive(zoom <= 1.0);
+    }
+
     /// Displays the item at the given index.
     ///
     /// The previously displayed page is deactivated, so that at most one
@@ -900,6 +978,7 @@ impl MediaViewer {
             }
         }
         imp.active_page.set(Some(&page));
+        self.follow_zoom_of(&page);
 
         page.activate();
     }
@@ -1094,6 +1173,53 @@ pub(crate) fn gtk_check() {
         // Nothing before the oldest photo: navigating back stays.
         viewer.navigate(-1);
         assert_eq!(imp.active_index.get(), 0);
+        viewer.close();
+    });
+
+    eprintln!("media viewer: zoom buttons and keys");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let entry = ViewerEntry {
+            item: ViewerItem::Photo {
+                file: downloaded_photo_file(810),
+                placeholder: None,
+            },
+            message_id: 1,
+        };
+        let viewer: MediaViewer = glib::Object::new();
+        viewer.open(&gtk::Picture::new(), &chat, vec![entry], 0);
+        let imp = viewer.imp();
+        let page = imp.active_page.upgrade().expect("a displayed page");
+
+        // A downloaded photo shows the zoom buttons.
+        assert!(imp.zoom_box.is_visible());
+        assert!(imp.carousel.is_interactive());
+
+        // Zoomed in, the carousel does not swipe, so dragging scrolls.
+        viewer
+            .activate_action("media-viewer.zoom-in", None)
+            .unwrap();
+        assert_eq!(page.zoom(), ZOOM_STEP);
+        assert!(!imp.carousel.is_interactive());
+        viewer
+            .activate_action("media-viewer.zoom-out", None)
+            .unwrap();
+        assert_eq!(page.zoom(), 1.0);
+        viewer
+            .activate_action("media-viewer.zoom-in", None)
+            .unwrap();
+        viewer
+            .activate_action("media-viewer.zoom-in", None)
+            .unwrap();
+        assert_eq!(page.zoom(), ZOOM_STEP * ZOOM_STEP);
+
+        viewer
+            .activate_action("media-viewer.zoom-reset", None)
+            .unwrap();
+        assert_eq!(page.zoom(), 1.0);
+        assert!(imp.carousel.is_interactive());
         viewer.close();
     });
 }

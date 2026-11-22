@@ -19,6 +19,26 @@ template $PaplMediaViewer: Gtk.Widget {
         tooltip-text: _("Back");
         css-classes: ["osd", "circular"];
       }
+
+      [end]
+      Gtk.Box zoom_box {
+        spacing: 6;
+        visible: false;
+
+        Gtk.Button zoom_out_button {
+          icon-name: "zoom-out-symbolic";
+          action-name: "media-viewer.zoom-out";
+          tooltip-text: _("Zoom Out");
+          css-classes: ["osd", "circular"];
+        }
+
+        Gtk.Button zoom_in_button {
+          icon-name: "zoom-in-symbolic";
+          action-name: "media-viewer.zoom-in";
+          tooltip-text: _("Zoom In");
+          css-classes: ["osd", "circular"];
+        }
+      }
     }
 
     content: $PaplScaleRevealer revealer {

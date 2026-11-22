@@ -23,7 +23,20 @@ mod imp {
     #[derive(Debug, Default)]
     pub(crate) struct MediaViewerPage {
         pub(super) overlay: gtk::Overlay,
+        /// Scrolls the photo while it is zoomed in.
+        pub(super) zoom_scroll: gtk::ScrolledWindow,
         pub(super) picture: gtk::Picture,
+        /// The zoom of the photo: 1 fits it into the page.
+        pub(super) zoom: Cell<f64>,
+        /// The zoom when a pinch started.
+        pub(super) zoom_start: Cell<f64>,
+        /// Where to scroll the zoomed photo once it is allocated, so that
+        /// the point under the pointer or the fingers stays in place.
+        pub(super) pending_scroll: Cell<Option<(f64, f64)>>,
+        /// The last position of the pointer over the page.
+        pub(super) pointer: Cell<Option<(f64, f64)>>,
+        /// The scroll position when a mouse drag started.
+        pub(super) drag_start: Cell<(f64, f64)>,
         /// The video widget rendering the media stream of a video item, with
         /// graphics offload enabled and its own built-in media controls.
         /// Only shown while a stream is bound to it.
@@ -59,6 +72,26 @@ mod imp {
     }
 
     impl ObjectImpl for MediaViewerPage {
+        fn properties() -> &'static [glib::ParamSpec] {
+            static PROPERTIES: std::sync::OnceLock<Vec<glib::ParamSpec>> =
+                std::sync::OnceLock::new();
+            PROPERTIES.get_or_init(|| {
+                vec![glib::ParamSpecDouble::builder("zoom")
+                    .minimum(1.0)
+                    .maximum(MAX_ZOOM)
+                    .default_value(1.0)
+                    .read_only()
+                    .build()]
+            })
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "zoom" => self.zoom.get().max(1.0).to_value(),
+                _ => unimplemented!(),
+            }
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
 
@@ -67,11 +100,17 @@ mod imp {
             obj.set_hexpand(true);
             obj.set_vexpand(true);
 
-            obj.set_layout_manager(Some(gtk::BinLayout::new()));
-
+            self.zoom.set(1.0);
             self.picture.set_hexpand(true);
             self.picture.set_vexpand(true);
-            self.overlay.set_child(Some(&self.picture));
+            self.zoom_scroll
+                .set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
+            self.zoom_scroll.set_child(Some(&self.picture));
+            if let Some(viewport) = self.zoom_scroll.child().and_downcast::<gtk::Viewport>() {
+                viewport.set_scroll_to_focus(false);
+            }
+            self.overlay.set_child(Some(&self.zoom_scroll));
+            obj.setup_zoom_gestures();
 
             self.video.set_hexpand(true);
             self.video.set_vexpand(true);
@@ -102,7 +141,17 @@ mod imp {
             self.click.connect_released(clone!(
                 #[weak]
                 obj,
-                move |_, _, _, _| {
+                move |_, n_press, x, y| {
+                    // A double click or tap zooms the photo in, or back out.
+                    if n_press == 2 && obj.can_zoom() {
+                        let zoom = if obj.zoom() > 1.0 {
+                            1.0
+                        } else {
+                            DOUBLE_TAP_ZOOM
+                        };
+                        obj.set_zoom(zoom, Some((x, y)));
+                        return;
+                    }
                     obj.handle_click();
                 }
             ));
@@ -117,13 +166,45 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for MediaViewerPage {}
+    impl WidgetImpl for MediaViewerPage {
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            self.overlay.measure(orientation, for_size)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            // Follow the page size, e.g. when the window is resized.
+            let zoom = self.zoom.get();
+            if zoom > 1.0 {
+                let size = (
+                    (width as f64 * zoom).round() as i32,
+                    (height as f64 * zoom).round() as i32,
+                );
+                if self.picture.size_request() != size {
+                    self.picture.set_size_request(size.0, size.1);
+                }
+            }
+
+            self.overlay.allocate(width, height, baseline, None);
+
+            if let Some((x, y)) = self.pending_scroll.take() {
+                self.zoom_scroll.hadjustment().set_value(x);
+                self.zoom_scroll.vadjustment().set_value(y);
+            }
+        }
+    }
 }
 
 glib::wrapper! {
     pub(crate) struct MediaViewerPage(ObjectSubclass<imp::MediaViewerPage>)
         @extends gtk::Widget;
 }
+
+/// The zoom of a double click or tap.
+const DOUBLE_TAP_ZOOM: f64 = 2.5;
+/// The largest zoom of a photo.
+pub(crate) const MAX_ZOOM: f64 = 8.0;
+/// The zoom step of the buttons, the keys and Ctrl+scrolling.
+pub(crate) const ZOOM_STEP: f64 = 1.25;
 
 impl Default for MediaViewerPage {
     fn default() -> Self {
@@ -152,6 +233,7 @@ impl MediaViewerPage {
 
         imp.generation.set(imp.generation.get() + 1);
         imp.displayed.set(false);
+        self.set_zoom(1.0, None);
         imp.photo_decoded.set(false);
         imp.is_stream_bound.set(false);
 
@@ -225,6 +307,7 @@ impl MediaViewerPage {
         let imp = self.imp();
 
         imp.displayed.set(false);
+        self.set_zoom(1.0, None);
 
         if let (Some(manager), Some(path)) = (imp.playback.borrow().clone(), self.media_path()) {
             if manager.is_current(&path) {
@@ -324,7 +407,11 @@ impl MediaViewerPage {
                 imp.download_button.set_visible(false);
 
                 match &*imp.item.borrow() {
-                    Some(ViewerItem::Photo { .. }) => self.maybe_decode_photo(),
+                    Some(ViewerItem::Photo { .. }) => {
+                        self.maybe_decode_photo();
+                        // It can be zoomed now.
+                        self.notify("zoom");
+                    }
                     Some(ViewerItem::Video { .. }) if imp.displayed.get() => self.start_playback(),
                     Some(ViewerItem::Video { .. }) => {}
                     None => {}
@@ -395,6 +482,151 @@ impl MediaViewerPage {
                 }
             }
         ));
+    }
+
+    /// The zoom of the photo: 1 fits it into the page.
+    pub(crate) fn zoom(&self) -> f64 {
+        self.imp().zoom.get().max(1.0)
+    }
+
+    /// Whether the item can be zoomed: a downloaded photo.
+    pub(crate) fn can_zoom(&self) -> bool {
+        let imp = self.imp();
+        matches!(&*imp.item.borrow(), Some(ViewerItem::Photo { .. }))
+            && imp.loader.status() == FileStatus::Downloaded
+    }
+
+    /// Zooms the photo to `zoom` (clamped to 1..=MAX_ZOOM), keeping the
+    /// point at `anchor` (in page coordinates, the center by default) in
+    /// place.
+    pub(crate) fn set_zoom(&self, zoom: f64, anchor: Option<(f64, f64)>) {
+        let imp = self.imp();
+
+        let zoom = if self.can_zoom() {
+            zoom.clamp(1.0, MAX_ZOOM)
+        } else {
+            1.0
+        };
+        let old = self.zoom();
+        if (zoom - old).abs() < f64::EPSILON {
+            return;
+        }
+
+        let (width, height) = (self.width() as f64, self.height() as f64);
+        let (x, y) = anchor.unwrap_or((width / 2.0, height / 2.0));
+        let hadj = imp.zoom_scroll.hadjustment();
+        let vadj = imp.zoom_scroll.vadjustment();
+        // The point of the unzoomed photo under the anchor
+        let (px, py) = ((hadj.value() + x) / old, (vadj.value() + y) / old);
+
+        imp.zoom.set(zoom);
+        if zoom > 1.0 {
+            imp.picture.set_size_request(
+                (width * zoom).round() as i32,
+                (height * zoom).round() as i32,
+            );
+            imp.pending_scroll.set(Some((px * zoom - x, py * zoom - y)));
+        } else {
+            imp.picture.set_size_request(-1, -1);
+            imp.pending_scroll.set(None);
+        }
+        self.queue_resize();
+        self.notify("zoom");
+    }
+
+    /// Multiplies the zoom by `factor` around `anchor`, or the pointer.
+    pub(crate) fn zoom_by(&self, factor: f64, anchor: Option<(f64, f64)>) {
+        let anchor = anchor.or(self.imp().pointer.get());
+        self.set_zoom(self.zoom() * factor, anchor);
+    }
+
+    /// Pinching, Ctrl+scrolling and dragging the zoomed photo with the
+    /// mouse (touch drags are scrolled by the scrolled window).
+    fn setup_zoom_gestures(&self) {
+        let pinch = gtk::GestureZoom::new();
+        pinch.set_propagation_phase(gtk::PropagationPhase::Capture);
+        pinch.connect_begin(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, _| {
+                obj.imp().zoom_start.set(obj.zoom());
+            }
+        ));
+        pinch.connect_scale_changed(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |gesture, scale| {
+                let anchor = gesture.bounding_box_center();
+                obj.set_zoom(obj.imp().zoom_start.get() * scale, anchor);
+            }
+        ));
+        self.add_controller(pinch);
+
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        scroll.connect_scroll(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |controller, _, dy| {
+                if !controller
+                    .current_event_state()
+                    .contains(gdk::ModifierType::CONTROL_MASK)
+                    || !obj.can_zoom()
+                {
+                    return glib::Propagation::Proceed;
+                }
+                let factor = if dy < 0.0 { ZOOM_STEP } else { 1.0 / ZOOM_STEP };
+                obj.zoom_by(factor, None);
+                glib::Propagation::Stop
+            }
+        ));
+        self.add_controller(scroll);
+
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, x, y| obj.imp().pointer.set(Some((x, y)))
+        ));
+        motion.connect_leave(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_| obj.imp().pointer.set(None)
+        ));
+        self.add_controller(motion);
+
+        let drag = gtk::GestureDrag::new();
+        drag.connect_drag_begin(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |gesture, _, _| {
+                let is_touch = gesture
+                    .device()
+                    .is_some_and(|d| d.source() == gdk::InputSource::Touchscreen);
+                if obj.zoom() <= 1.0 || is_touch {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                let imp = obj.imp();
+                imp.drag_start.set((
+                    imp.zoom_scroll.hadjustment().value(),
+                    imp.zoom_scroll.vadjustment().value(),
+                ));
+            }
+        ));
+        drag.connect_drag_update(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, dx, dy| {
+                let imp = obj.imp();
+                let (x, y) = imp.drag_start.get();
+                imp.zoom_scroll.hadjustment().set_value(x - dx);
+                imp.zoom_scroll.vadjustment().set_value(y - dy);
+            }
+        ));
+        self.add_controller(drag);
     }
 
     /// Clicking the page downloads its media, or cancels an ongoing manual
@@ -484,5 +716,75 @@ pub(crate) fn gtk_check() {
         assert!(media.is_muted());
         assert!(media.is_loop());
         page.deactivate();
+    });
+
+    eprintln!("media viewer page: zooming a photo");
+
+    crate::model::test_support::isolated(|| {
+        use crate::model::test_support::*;
+
+        let session = session();
+        let page: MediaViewerPage = glib::Object::new();
+        let allocate = |page: &MediaViewerPage| {
+            page.measure(gtk::Orientation::Horizontal, -1);
+            page.measure(gtk::Orientation::Vertical, 400);
+            page.size_allocate(&gtk::Allocation::new(0, 0, 400, 300), -1);
+        };
+        let photo = ViewerItem::Photo {
+            file: downloaded_photo_file(800),
+            placeholder: None,
+        };
+        page.set_item(&session, photo.clone(), None);
+        allocate(&page);
+        let imp = page.imp();
+        assert!(page.can_zoom());
+        assert_eq!(page.zoom(), 1.0);
+
+        // Zoomed in around a point, which stays under the pointer.
+        page.set_zoom(2.0, Some((100.0, 100.0)));
+        allocate(&page);
+        assert_eq!(page.zoom(), 2.0);
+        assert_eq!(imp.picture.size_request(), (800, 600));
+        assert_eq!(imp.zoom_scroll.hadjustment().value(), 100.0);
+        assert_eq!(imp.zoom_scroll.vadjustment().value(), 100.0);
+
+        // Zooming further around the same point keeps it in place too.
+        page.zoom_by(ZOOM_STEP, Some((100.0, 100.0)));
+        allocate(&page);
+        assert_eq!(page.zoom(), 2.0 * ZOOM_STEP);
+        assert_eq!(imp.zoom_scroll.hadjustment().value(), 150.0);
+
+        // The zoom is limited, and back at 1 the photo fits again.
+        page.zoom_by(100.0, None);
+        assert_eq!(page.zoom(), MAX_ZOOM);
+        page.set_zoom(0.1, None);
+        assert_eq!(page.zoom(), 1.0);
+        assert_eq!(imp.picture.size_request(), (-1, -1));
+
+        // Leaving the page or showing another item resets the zoom.
+        page.set_zoom(3.0, None);
+        page.deactivate();
+        assert_eq!(page.zoom(), 1.0);
+        page.set_zoom(3.0, None);
+        page.set_item(&session, photo, None);
+        assert_eq!(page.zoom(), 1.0);
+
+        // Videos and photos still to be downloaded are not zoomed.
+        let video = ViewerItem::Video {
+            file: downloaded_photo_file(801),
+            placeholder: None,
+            is_animation: false,
+        };
+        page.set_item(&session, video, None);
+        page.set_zoom(2.0, None);
+        assert_eq!(page.zoom(), 1.0);
+        let not_downloaded = ViewerItem::Photo {
+            file: file(802),
+            placeholder: None,
+        };
+        page.set_item(&session, not_downloaded, None);
+        assert!(!page.can_zoom());
+        page.set_zoom(2.0, None);
+        assert_eq!(page.zoom(), 1.0);
     });
 }

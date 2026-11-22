@@ -362,6 +362,21 @@ MUTATIONS = [
      "    unsafe { libc::_exit(exit_code.value()) }",
      "    std::process::exit(exit_code.value())",
      "e2e:quits-although-tdlib-hangs-at-exit"),
+    # Zooming photos in the media viewer (new in consolidated)
+    ("zoom", "the zoomed point stays under the pointer", "src/ui/session/content/media_viewer_page.rs",
+     "imp.pending_scroll.set(Some((px * zoom - x, py * zoom - y)));",
+     "imp.pending_scroll.set(Some((px * zoom, py * zoom)));",
+     "gtk"),
+    ("zoom", "the zoom is limited", "src/ui/session/content/media_viewer_page.rs",
+     "zoom.clamp(1.0, MAX_ZOOM)", "zoom.max(1.0)",
+     "gtk"),
+    ("zoom", "a zoomed photo does not swipe", "src/ui/session/content/media_viewer.rs",
+     "imp.carousel.set_interactive(zoom <= 1.0);", "imp.carousel.set_interactive(true);",
+     "gtk"),
+    ("zoom", "leaving a page resets its zoom", "src/ui/session/content/media_viewer_page.rs",
+     "        imp.displayed.set(false);\n        self.set_zoom(1.0, None);\n\n",
+     "        imp.displayed.set(false);\n\n",
+     "gtk"),
 ]
 
 

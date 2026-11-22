@@ -72,6 +72,13 @@ Test kinds:
 | `438e5f0c` | MediaDownloadButton registered | `gtk:/app/drey/paper-plane/ui/session/content/message_row/media_download_button.ui: PaplMediaDownloadButton` |
 | `52b9fba2` | Merge resolution: secret chat property in next's history, Replies avatar, background vs. close | `gtk:secret chat style in the chat history`, `unit:ui::components::avatar::tests::appearance_of_special_chats`, `gtk:running in the background`, `e2e:chat-list-open-and-send` |
 
+## New features
+
+Zooming photos in the media viewer (buttons, Ctrl+plus/minus/0, pinching,
+Ctrl+scrolling, double clicks and taps): `gtk:media viewer page: zooming a
+photo`, `gtk:media viewer: zoom buttons and keys`, and the `zoom` mutations
+in tests/mutations.py.
+
 ## Known gaps
 
 None. The behaviour that the independent review of 2026-11-20 found untested is

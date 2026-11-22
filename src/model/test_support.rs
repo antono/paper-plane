@@ -467,3 +467,25 @@ pub(crate) fn set_draft(session: &model::ClientStateSession, chat_id: ChatId, te
         },
     ));
 }
+
+/// A downloaded photo file: a small PNG image at a temporary path.
+pub(crate) fn downloaded_photo_file(id: i32) -> types::File {
+    use gtk::gdk;
+    use gtk::glib;
+    use gtk::prelude::*;
+
+    let texture = gdk::MemoryTexture::new(
+        4,
+        3,
+        gdk::MemoryFormat::R8g8b8,
+        &glib::Bytes::from_owned(vec![200u8; 4 * 3 * 3]),
+        4 * 3,
+    );
+    let path = std::env::temp_dir().join(format!("paper-plane-test-photo-{id}.png"));
+    texture.save_to_png(&path).unwrap();
+    let mut file = file(id);
+    file.local.path = path.to_str().unwrap().to_owned();
+    file.local.is_downloading_completed = true;
+    file.local.downloaded_size = file.size;
+    file
+}
