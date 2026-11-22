@@ -81,7 +81,7 @@ impl ChatListItem {
             self.chat_list_type().0.clone(),
             chat.id(),
             !self.is_pinned(),
-            chat.session_().client_().id(),
+            chat.client_id()?,
         )
         .await
     }

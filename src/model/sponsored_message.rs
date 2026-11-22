@@ -50,6 +50,14 @@ glib::wrapper! {
 }
 
 impl SponsoredMessage {
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        chat: &model::Chat,
+        sponsored_message: tdlib::types::SponsoredMessage,
+    ) -> Self {
+        Self::new(chat, sponsored_message)
+    }
+
     fn new(chat: &model::Chat, sponsored_message: tdlib::types::SponsoredMessage) -> Self {
         let sponsor_label = if sponsored_message.sponsor.info.is_empty() {
             sponsored_message.title.clone()
@@ -69,7 +77,7 @@ impl SponsoredMessage {
     }
 
     pub(crate) async fn request(chat: &model::Chat) -> Result<Option<Self>, tdlib::types::Error> {
-        tdlib::functions::get_chat_sponsored_messages(chat.id(), chat.session_().client_().id())
+        tdlib::functions::get_chat_sponsored_messages(chat.id(), chat.client_id()?)
             .await
             .map(
                 |tdlib::enums::SponsoredMessages::SponsoredMessages(mut sponsored_messages)| {

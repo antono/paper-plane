@@ -9,9 +9,9 @@ pub const DEFAULT_SCENARIO: &str = include_str!("../../scenarios/two-chats.json"
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Scenario {
-    /// `ready` (already logged in), `phone` (log in with a phone number) or
-    /// `email` (TDLib asks for an email address, which the app does not
-    /// support).
+    /// `ready` (already logged in), `phone` (log in with a phone number),
+    /// `registration` (a new account to register with a name) or `email`
+    /// (TDLib asks for an email address, which the app does not support).
     #[serde(default = "default_auth")]
     pub auth: String,
     /// The login code accepted when `auth` is `phone`.
@@ -20,9 +20,17 @@ pub struct Scenario {
     pub me: Person,
     #[serde(default)]
     pub chats: Vec<ChatSpec>,
+    /// Users found by searchPublicChats, whose chats are not in the chat
+    /// list.
+    #[serde(default)]
+    pub public: Vec<Person>,
     /// Requests (by `@type`) that fail with the given error.
     #[serde(default)]
     pub fail: std::collections::HashMap<String, Failure>,
+    /// Like libtdjson, whose static destructors race against its worker
+    /// threads, the process hangs at a normal exit: only `_exit` ends it.
+    #[serde(default)]
+    pub hang_at_exit: bool,
     /// The date of the newest message; the others are older.
     #[serde(default = "default_now")]
     pub now: i32,
@@ -448,4 +456,33 @@ pub fn interaction_info(reactions: &[ReactionSpec]) -> Option<types::MessageInte
             can_get_added_reactions: false,
         }),
     })
+}
+
+pub fn document_content(file_id: i32, file_name: &str, caption: &str) -> enums::MessageContent {
+    enums::MessageContent::MessageDocument(types::MessageDocument {
+        document: types::Document {
+            file_name: file_name.to_owned(),
+            mime_type: "application/octet-stream".to_owned(),
+            minithumbnail: None,
+            thumbnail: None,
+            document: file(file_id, None, 1000),
+        },
+        caption: types::FormattedText {
+            text: caption.to_owned(),
+            entities: vec![],
+        },
+    })
+}
+
+/// A private chat with `person` outside of any chat list.
+pub fn unlisted_chat(person: &Person) -> types::Chat {
+    let spec = ChatSpec {
+        with: person.clone(),
+        unread: 0,
+        messages: vec![],
+        filler: 0,
+    };
+    let mut chat = private_chat(&spec, 0);
+    chat.positions = vec![];
+    chat
 }

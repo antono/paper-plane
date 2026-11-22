@@ -149,6 +149,9 @@ impl Engine {
         };
         let scenario: Scenario =
             serde_json::from_str(&scenario).expect("fake-tdjson: invalid scenario");
+        if scenario.hang_at_exit {
+            hang_at_exit();
+        }
         let log = std::env::var("FAKE_TDJSON_LOG").ok().map(|path| {
             std::fs::OpenOptions::new()
                 .create(true)
@@ -272,6 +275,21 @@ impl Engine {
                 self.ok(client_id, extra);
                 match self.scenario.auth.as_str() {
                     "ready" => self.ready(client_id),
+                    "registration" => self.auth_state(
+                        client_id,
+                        enums::AuthorizationState::WaitRegistration(
+                            types::AuthorizationStateWaitRegistration {
+                                terms_of_service: types::TermsOfService {
+                                    text: types::FormattedText {
+                                        text: "Be nice".to_owned(),
+                                        entities: vec![],
+                                    },
+                                    min_user_age: 0,
+                                    show_popup: false,
+                                },
+                            },
+                        ),
+                    ),
                     // A login step Paper Plane does not implement
                     "email" => self.auth_state(
                         client_id,
@@ -311,6 +329,78 @@ impl Engine {
                 } else {
                     self.error(client_id, extra, 400, "PHONE_CODE_INVALID");
                 }
+            }
+            "registerUser" => {
+                let first = request["first_name"].as_str().unwrap_or_default();
+                let last = request["last_name"].as_str().unwrap_or_default();
+                if first.is_empty() {
+                    self.error(client_id, extra, 400, "FIRSTNAME_INVALID");
+                } else {
+                    self.scenario.me.name = format!("{first} {last}").trim().to_owned();
+                    self.ok(client_id, extra);
+                    self.ready(client_id);
+                }
+            }
+            "searchChats" | "searchChatsOnServer" => {
+                let query = request["query"].as_str().unwrap_or_default().to_lowercase();
+                let chat_ids: Vec<i64> = self
+                    .scenario
+                    .chats
+                    .iter()
+                    .filter(|c| !query.is_empty() && c.with.name.to_lowercase().contains(&query))
+                    .map(|c| c.with.id)
+                    .collect();
+                self.emit(
+                    client_id,
+                    enums::Chats::Chats(types::Chats {
+                        total_count: chat_ids.len() as i32,
+                        chat_ids,
+                    }),
+                    extra,
+                );
+            }
+            "searchContacts" => {
+                let query = request["query"].as_str().unwrap_or_default().to_lowercase();
+                let user_ids: Vec<i64> = self
+                    .scenario
+                    .chats
+                    .iter()
+                    .filter(|c| c.with.name.to_lowercase().contains(&query))
+                    .map(|c| c.with.id)
+                    .collect();
+                self.emit(
+                    client_id,
+                    enums::Users::Users(types::Users {
+                        total_count: user_ids.len() as i32,
+                        user_ids,
+                    }),
+                    extra,
+                );
+            }
+            "searchPublicChats" => {
+                let query = request["query"].as_str().unwrap_or_default().to_lowercase();
+                let found: Vec<scenario::Person> = self
+                    .scenario
+                    .public
+                    .iter()
+                    .filter(|p| p.name.to_lowercase().contains(&query))
+                    .cloned()
+                    .collect();
+                for person in &found {
+                    let user = scenario::user(person);
+                    self.update(client_id, enums::Update::User(types::UpdateUser { user }));
+                    let chat = scenario::unlisted_chat(person);
+                    self.update(client_id, enums::Update::NewChat(types::UpdateNewChat { chat }));
+                }
+                let chat_ids: Vec<i64> = found.iter().map(|p| p.id).collect();
+                self.emit(
+                    client_id,
+                    enums::Chats::Chats(types::Chats {
+                        total_count: chat_ids.len() as i32,
+                        chat_ids,
+                    }),
+                    extra,
+                );
             }
             "getMe" => {
                 let me = scenario::user(&self.scenario.me);
@@ -522,23 +612,55 @@ impl Engine {
     fn send_message(&mut self, client_id: i32, request: &Value, extra: Option<&Value>) {
         let chat_id = request["chat_id"].as_i64().unwrap_or_default();
         let content = &request["input_message_content"];
-        if content["@type"] != "inputMessageText" || !self.messages.contains_key(&chat_id) {
-            self.error(client_id, extra, 400, "fake-tdjson only sends text to known chats");
+        if !self.messages.contains_key(&chat_id) {
+            self.error(client_id, extra, 400, "fake-tdjson only sends to known chats");
             return;
         }
-        let text = content["text"]["text"].as_str().unwrap_or_default().to_owned();
         let me = self.scenario.me.id;
         let date = self.scenario.now + 1;
+        let file_id = 900_000 + self.next_pending_id as i32;
+        let local_name = |key: &str| {
+            content[key][key]["path"]
+                .as_str()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let caption = content["caption"]["text"].as_str().unwrap_or_default().to_owned();
+        let (text, message_content) = match content["@type"].as_str() {
+            Some("inputMessageText") => {
+                (content["text"]["text"].as_str().unwrap_or_default().to_owned(), None)
+            }
+            Some("inputMessagePhoto") => {
+                (caption.clone(), Some(scenario::photo_content(file_id, 1000, &caption)))
+            }
+            Some("inputMessageDocument") => {
+                let name = local_name("document");
+                (caption.clone(), Some(scenario::document_content(file_id, &name, &caption)))
+            }
+            _ => {
+                self.error(client_id, extra, 400, "fake-tdjson cannot send this content");
+                return;
+            }
+        };
+        // A reply to a message (message_id 0 is no reply)
+        let reply_to = match request["reply_to"]["message_id"].as_i64() {
+            Some(id) if id != 0 => Some(scenario::reply_to(chat_id, id)),
+            _ => None,
+        };
+        let build = |id, sending_state| {
+            let mut message = scenario::text_message(chat_id, id, me, true, date, &text, sending_state);
+            if let Some(content) = message_content.clone() {
+                message.content = content;
+            }
+            message.reply_to = reply_to.clone();
+            message
+        };
 
         let pending_id = self.next_pending_id;
         self.next_pending_id += 1;
-        let pending = scenario::text_message(
-            chat_id,
+        let pending = build(
             pending_id,
-            me,
-            true,
-            date,
-            &text,
             Some(enums::MessageSendingState::Pending(
                 types::MessageSendingStatePending { sending_id: 0 },
             )),
@@ -551,7 +673,7 @@ impl Engine {
 
         let id = self.next_sent_id;
         self.next_sent_id += 1;
-        let sent = scenario::text_message(chat_id, id, me, true, date, &text, None);
+        let sent = build(id, None);
         self.messages.get_mut(&chat_id).unwrap().insert(id, sent.clone());
         self.update(
             client_id,
@@ -565,6 +687,23 @@ impl Engine {
 
 // ---------------------------------------------------------------------------
 // The C interface of libtdjson
+
+extern "C" {
+    fn atexit(callback: extern "C" fn()) -> c_int;
+}
+
+extern "C" fn hang_forever() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
+}
+
+/// Makes a normal exit of the process hang, as the teardown of libtdjson
+/// can; `_exit` skips the handler.
+fn hang_at_exit() {
+    // SAFETY: registers a plain function without captured state.
+    unsafe { atexit(hang_forever) };
+}
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();

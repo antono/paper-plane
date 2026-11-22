@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use glib::clone;
@@ -162,116 +164,15 @@ impl Window {
         session: &model::ClientStateSession,
     ) {
         let app = self.application().unwrap();
-
-        log::debug!(
-            "Handling notification group update: {} added, {} removed",
-            notification_group.0.added_notifications.len(),
-            notification_group.0.removed_notification_ids.len()
-        );
-
-        let chat = session.chat(notification_group.0.chat_id);
-
-        for notification in notification_group.0.added_notifications {
-            let notification_id = notification.id;
-
-            let notification = match notification.r#type {
-                tdlib::enums::NotificationType::NewMessage(data) => {
-                    log::debug!("Notification {notification_id}: new message");
-                    let message = model::Message::new(&chat, data.message);
-                    let mut body = strings::message_content(&message);
-
-                    // Add the sender's name to the body if the chat is a group
-                    if matches!(chat.chat_type(), model::ChatType::BasicGroup(_))
-                        || matches!(chat.chat_type(), model::ChatType::Supergroup(s) if !s.is_channel())
-                    {
-                        let sender_name = strings::message_sender(&message.sender(), true);
-                        body.insert_str(0, &(sender_name + ": "));
-                    }
-
-                    let notification = gio::Notification::new(&chat.title());
-                    notification.set_body(Some(&body));
-
-                    Some(notification)
-                }
-                tdlib::enums::NotificationType::NewCall(_) => {
-                    log::debug!("Notification {notification_id}: incoming call");
-                    let body = gettext("Incoming call");
-                    let notification = gio::Notification::new(&chat.title());
-                    notification.set_body(Some(&body));
-
-                    Some(notification)
-                }
-                other => {
-                    log::debug!("Notification {notification_id}: ignoring type {other:?}");
-                    None
-                }
-            };
-
-            if let Some(notification) = notification {
-                notification.set_default_action_and_target_value(
-                    "app.select-chat",
-                    Some(&(session.client_().id(), chat.id()).to_variant()),
-                );
-
-                if let Some(avatar) = chat.avatar() {
-                    let avatar_file = &avatar.0;
-                    if avatar_file.local.is_downloading_completed {
-                        match gdk::Texture::from_filename(&avatar_file.local.path) {
-                            Ok(texture) => notification.set_icon(&texture),
-                            Err(e) => log::warn!(
-                                "Notification {notification_id}: failed to load avatar texture: {e:?}"
-                            ),
-                        }
-                        log::debug!("Notification {notification_id}: sending with loaded avatar");
-                        app.send_notification(Some(&notification_id.to_string()), &notification);
-                    } else {
-                        log::debug!(
-                            "Notification {notification_id}: sending without icon, downloading {}",
-                            avatar_file.id
-                        );
-                        app.send_notification(Some(&notification_id.to_string()), &notification);
-
-                        let file_id = avatar_file.id;
-                        utils::spawn(clone!(
-                            #[weak(rename_to = _obj)]
-                            self,
-                            #[weak]
-                            session,
-                            #[weak]
-                            app,
-                            async move {
-                                match session.download_file(file_id).await {
-                                    Ok(file) => {
-                                        let texture =
-                                            gdk::Texture::from_filename(file.local.path).unwrap();
-                                        notification.set_icon(&texture);
-
-                                        log::debug!(
-                                            "Notification {notification_id}: re-sending with downloaded avatar"
-                                        );
-                                        app.send_notification(
-                                            Some(&notification_id.to_string()),
-                                            &notification,
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Failed to download an avatar: {e:?}");
-                                    }
-                                }
-                            }
-                        ));
-                    }
-                } else {
-                    log::debug!("Notification {notification_id}: sending without icon");
-                    app.send_notification(Some(&notification_id.to_string()), &notification);
-                }
+        let send_app = app.downgrade();
+        let send: SendNotification = Rc::new(move |id, notification| {
+            if let Some(app) = send_app.upgrade() {
+                app.send_notification(Some(id), notification);
             }
-        }
-
-        for notification_id in notification_group.0.removed_notification_ids {
-            log::debug!("Notification {notification_id}: withdrawing");
-            app.withdraw_notification(&notification_id.to_string());
-        }
+        });
+        handle_notification_group(notification_group.0, session, send, &|id| {
+            app.withdraw_notification(id)
+        });
     }
 
     pub(crate) fn save_window_size(&self) -> Result<(), glib::BoolError> {
@@ -299,4 +200,215 @@ impl Window {
             self.maximize();
         }
     }
+}
+
+/// Sends a notification under the given id.
+type SendNotification = Rc<dyn Fn(&str, &gio::Notification)>;
+
+/// The title and the body of a notification, `None` for the types that are
+/// not shown.
+fn notification_text(
+    chat: &model::Chat,
+    notification_type: tdlib::enums::NotificationType,
+) -> Option<(String, String)> {
+    match notification_type {
+        tdlib::enums::NotificationType::NewMessage(data) => {
+            let message = model::Message::new(chat, data.message);
+            let mut body = strings::message_content(&message);
+
+            // Add the sender's name to the body if the chat is a group
+            if matches!(chat.chat_type(), model::ChatType::BasicGroup(_))
+                || matches!(chat.chat_type(), model::ChatType::Supergroup(s) if !s.is_channel())
+            {
+                let sender_name = strings::message_sender(&message.sender(), true);
+                body.insert_str(0, &(sender_name + ": "));
+            }
+
+            Some((chat.title(), body))
+        }
+        tdlib::enums::NotificationType::NewCall(_) => {
+            Some((chat.title(), gettext("Incoming call")))
+        }
+        other => {
+            log::debug!("Notification: ignoring type {other:?}");
+            None
+        }
+    }
+}
+
+/// Sends the added notifications of a group at once, also when the avatar of
+/// the chat is not downloaded yet (it is added when it is), and withdraws the
+/// removed ones.
+fn handle_notification_group(
+    notification_group: tdlib::types::UpdateNotificationGroup,
+    session: &model::ClientStateSession,
+    send: SendNotification,
+    withdraw: &dyn Fn(&str),
+) {
+    log::debug!(
+        "Handling notification group update: {} added, {} removed",
+        notification_group.added_notifications.len(),
+        notification_group.removed_notification_ids.len()
+    );
+
+    let chat = session.chat(notification_group.chat_id);
+
+    for notification in notification_group.added_notifications {
+        let notification_id = notification.id.to_string();
+
+        let Some((title, body)) = notification_text(&chat, notification.r#type) else {
+            continue;
+        };
+        let notification = gio::Notification::new(&title);
+        notification.set_body(Some(&body));
+        notification.set_default_action_and_target_value(
+            "app.select-chat",
+            Some(&(session.client_().id(), chat.id()).to_variant()),
+        );
+
+        let Some(avatar) = chat.avatar() else {
+            log::debug!("Notification {notification_id}: sending without icon");
+            send(&notification_id, &notification);
+            continue;
+        };
+
+        let avatar_file = &avatar.0;
+        if avatar_file.local.is_downloading_completed {
+            match gdk::Texture::from_filename(&avatar_file.local.path) {
+                Ok(texture) => notification.set_icon(&texture),
+                Err(e) => log::warn!(
+                    "Notification {notification_id}: failed to load avatar texture: {e:?}"
+                ),
+            }
+            log::debug!("Notification {notification_id}: sending with loaded avatar");
+            send(&notification_id, &notification);
+            continue;
+        }
+
+        log::debug!(
+            "Notification {notification_id}: sending without icon, downloading {}",
+            avatar_file.id
+        );
+        send(&notification_id, &notification);
+
+        let file_id = avatar_file.id;
+        let send = send.clone();
+        utils::spawn(clone!(
+            #[weak]
+            session,
+            async move {
+                match session.download_file(file_id).await {
+                    Ok(file) => match gdk::Texture::from_filename(file.local.path) {
+                        Ok(texture) => {
+                            notification.set_icon(&texture);
+                            log::debug!(
+                                "Notification {notification_id}: re-sending with downloaded avatar"
+                            );
+                            send(&notification_id, &notification);
+                        }
+                        Err(e) => log::warn!("Failed to load a downloaded avatar: {e:?}"),
+                    },
+                    Err(e) => log::warn!("Failed to download an avatar: {e:?}"),
+                }
+            }
+        ));
+    }
+
+    for notification_id in notification_group.removed_notification_ids {
+        log::debug!("Notification {notification_id}: withdrawing");
+        withdraw(&notification_id.to_string());
+    }
+}
+
+/// Checks of the notifications (5418fc72) that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use std::cell::RefCell;
+
+    use crate::model::test_support::*;
+
+    eprintln!("notifications are sent at once");
+
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let alice = add_private_chat(&session, 42, 42, "Alice");
+        add_user(&session, 43);
+        let bob = add_private_chat(&session, 43, 43, "Bob");
+        // Bob's photo is not downloaded yet
+        session.handle_update(tdlib::enums::Update::ChatPhoto(
+            tdlib::types::UpdateChatPhoto {
+                chat_id: bob.id(),
+                photo: Some(tdlib::types::ChatPhotoInfo {
+                    small: file(500),
+                    big: file(501),
+                    minithumbnail: None,
+                    has_animation: false,
+                    is_personal: false,
+                }),
+            },
+        ));
+        assert!(alice.avatar().is_none());
+        assert!(bob.avatar().is_some());
+
+        let new_message = |chat: &model::Chat, id: i32, body: &str| tdlib::types::Notification {
+            id,
+            date: DAY,
+            is_silent: false,
+            r#type: tdlib::enums::NotificationType::NewMessage(
+                tdlib::types::NotificationTypeNewMessage {
+                    message: message(chat.id(), id as i64, DAY, 0, text(body)),
+                    show_preview: true,
+                },
+            ),
+        };
+        let group = |chat: &model::Chat, added, removed| tdlib::types::UpdateNotificationGroup {
+            notification_group_id: 1,
+            r#type: tdlib::enums::NotificationGroupType::Messages,
+            chat_id: chat.id(),
+            notification_settings_chat_id: chat.id(),
+            notification_sound_id: 0,
+            total_count: 1,
+            added_notifications: added,
+            removed_notification_ids: removed,
+        };
+
+        assert_eq!(
+            notification_text(&alice, new_message(&alice, 1, "hi").r#type),
+            Some(("Alice".to_owned(), "hi".to_owned()))
+        );
+        assert_eq!(
+            notification_text(
+                &alice,
+                tdlib::enums::NotificationType::NewCall(tdlib::types::NotificationTypeNewCall {
+                    call_id: 7
+                })
+            ),
+            Some(("Alice".to_owned(), gettext("Incoming call")))
+        );
+
+        let sent = Rc::new(RefCell::new(Vec::<String>::new()));
+        let withdrawn = RefCell::new(Vec::<String>::new());
+        let send: SendNotification = {
+            let sent = sent.clone();
+            Rc::new(move |id, _| sent.borrow_mut().push(id.to_owned()))
+        };
+
+        // A chat without a photo, and a chat whose photo is still to be
+        // downloaded: both are sent right away, not after the download.
+        handle_notification_group(
+            group(&alice, vec![new_message(&alice, 1, "hi")], vec![]),
+            &session,
+            send.clone(),
+            &|id| withdrawn.borrow_mut().push(id.to_owned()),
+        );
+        handle_notification_group(
+            group(&bob, vec![new_message(&bob, 2, "yo")], vec![1]),
+            &session,
+            send,
+            &|id| withdrawn.borrow_mut().push(id.to_owned()),
+        );
+        assert_eq!(*sent.borrow(), ["1", "2"]);
+        assert_eq!(*withdrawn.borrow(), ["1"]);
+    });
 }

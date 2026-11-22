@@ -649,6 +649,9 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     rows_gtk_check();
+    bubble::gtk_check();
+    voice::gtk_check();
+    media_video_tile::gtk_check();
     label::gtk_check();
     reactions_chooser::gtk_check();
     video::gtk_check();
@@ -710,9 +713,8 @@ fn rows_gtk_check() {
         add_user(&session, 42);
         let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
         let mut td_reply = message(REPLIES, 1, DAY, 0, text("a reply"));
-        td_reply.sender_id = tdlib::enums::MessageSender::User(tdlib::types::MessageSenderUser {
-            user_id: REPLIES,
-        });
+        td_reply.sender_id =
+            tdlib::enums::MessageSender::User(tdlib::types::MessageSenderUser { user_id: REPLIES });
         td_reply.is_outgoing = false;
         td_reply.forward_info = forwarded_from(42);
         let reply = model::Message::new(&replies, td_reply);
@@ -724,8 +726,7 @@ fn rows_gtk_check() {
         // Copy Text puts the plain text of the message on the clipboard and
         // says so (743880f7).
         let overlay = adw::ToastOverlay::new();
-        let text_message =
-            model::Message::new(&chat, message(ME, 2, DAY, 0, text("copy *me*")));
+        let text_message = model::Message::new(&chat, message(ME, 2, DAY, 0, text("copy *me*")));
         let row = Row::new(text_message.upcast_ref());
         overlay.set_child(Some(&row));
         row.activate_action("message-row.copy-text", None).unwrap();

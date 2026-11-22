@@ -35,6 +35,9 @@ mod imp {
         pub(super) play_when_downloaded: Cell<bool>,
         /// The shared playback engine used to play the voice note.
         pub(super) playback: RefCell<Option<playback_manager::PlaybackManager>>,
+        /// The playback engine of a test, which has no session view.
+        #[cfg(test)]
+        pub(super) test_playback: RefCell<Option<playback_manager::PlaybackManager>>,
         pub(super) loader: MediaLoader,
         #[template_child]
         pub(super) message_bubble: TemplateChild<ui::MessageBubble>,
@@ -177,6 +180,10 @@ impl MessageBaseExt for MessageVoiceNote {
 impl MessageVoiceNote {
     /// The shared playback engine of the session, if it is still alive.
     fn playback_manager(&self) -> Option<playback_manager::PlaybackManager> {
+        #[cfg(test)]
+        if let Some(manager) = self.imp().test_playback.borrow().clone() {
+            return Some(manager);
+        }
         self.ancestor(ui::Session::static_type())
             .and_downcast::<ui::Session>()
             .map(|session| session.playback_manager().clone())
@@ -279,10 +286,6 @@ impl MessageVoiceNote {
             return;
         }
 
-        let media = manager.media_file();
-        media.set_muted(false);
-        media.set_loop(false);
-
         manager.play_file(
             &path,
             clone!(
@@ -297,6 +300,9 @@ impl MessageVoiceNote {
                 self,
                 move |media: &gtk::MediaFile| {
                     obj.update_waveform_progress(media);
+                    // Set on the prepared stream, see MediaViewerPage
+                    media.set_muted(false);
+                    media.set_loop(false);
                     media.play();
                 }
             ),
@@ -421,4 +427,81 @@ mod tests {
         assert_eq!(format_duration(137), "02:17");
         assert_eq!(format_duration(3600), "60:00");
     }
+}
+
+/// Checks of the voice note row that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("voice notes play from their row");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let wav = playback_manager::tests::silent_wav("voice-note");
+        // Larger than what is downloaded automatically
+        let mut voice = file(600);
+        voice.size = 1 << 30;
+        voice.expected_size = 1 << 30;
+        let content =
+            tdlib::enums::MessageContent::MessageVoiceNote(tdlib::types::MessageVoiceNote {
+                voice_note: tdlib::types::VoiceNote {
+                    duration: 1,
+                    waveform: String::new(),
+                    mime_type: "audio/wav".to_owned(),
+                    speech_recognition_result: None,
+                    voice: voice.clone(),
+                },
+                caption: formatted_text(""),
+                is_listened: false,
+            });
+        let message = model::Message::new(&chat, message(ME, 1, DAY, 0, content));
+
+        let row: MessageVoiceNote = glib::Object::new();
+        let manager = playback_manager::PlaybackManager::new();
+        row.imp().test_playback.replace(Some(manager.clone()));
+        row.set_message(&message);
+        let imp = row.imp();
+
+        // Not downloaded: a click downloads the voice note (f966e155)...
+        assert!(imp.download_button.is_visible());
+        row.handle_click();
+        assert!(imp.play_when_downloaded.get());
+        assert!(matches!(imp.loader.status(), FileStatus::Downloading(_)));
+
+        // ...and plays it as soon as the download is done.
+        let mut downloaded = voice;
+        downloaded.local.path = wav.to_str().unwrap().to_owned();
+        downloaded.local.is_downloading_completed = true;
+        downloaded.local.downloaded_size = downloaded.size;
+        session.handle_update(tdlib::enums::Update::File(tdlib::types::UpdateFile {
+            file: downloaded,
+        }));
+        let context = glib::MainContext::ref_thread_default();
+        while context.iteration(false) {}
+
+        assert_eq!(imp.loader.status(), FileStatus::Downloaded);
+        assert!(!imp.download_button.is_visible());
+        assert!(!imp.play_when_downloaded.get());
+        assert!(
+            manager.is_current(wav.to_str().unwrap()),
+            "the voice note is not played"
+        );
+
+        // Once prepared it plays; a second click pauses it.
+        let media = manager.media_file();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !media.is_playing() && std::time::Instant::now() < deadline {
+            context.iteration(false);
+        }
+        assert!(
+            media.is_playing(),
+            "the voice note did not start: {:?}",
+            media.error()
+        );
+        row.handle_click();
+        assert!(!media.is_playing());
+        manager.stop();
+    });
 }

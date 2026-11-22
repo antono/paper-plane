@@ -315,3 +315,70 @@ fn hash_label(label: &str) -> i64 {
     label.hash(&mut hasher);
     hasher.finish() as i64
 }
+
+/// Checks of the message bubble that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("bubble senders in the Replies chat");
+
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        add_user(&session, REPLIES);
+        let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
+        let bubble: MessageBubble = glib::Object::new();
+
+        // A reply shows its original author as the sender (#467).
+        let reply = model::Message::new(&replies, replies_reply(1, 42));
+        bubble.update_from_message(&reply, false);
+        let sender = &bubble.imp().sender_label;
+        assert!(sender.is_visible());
+        assert!(sender.label().contains("42"), "{}", sender.label());
+
+        // Own messages in the Replies chat have no sender.
+        let own = model::Message::new(&replies, message(REPLIES, 2, DAY, 0, text("mine")));
+        bubble.update_from_message(&own, false);
+        assert!(!bubble.imp().sender_label.is_visible());
+    });
+
+    eprintln!("sponsored message label");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let sponsored = |info: &str| {
+            model::SponsoredMessage::new_for_test(
+                &chat,
+                tdlib::types::SponsoredMessage {
+                    message_id: 1,
+                    is_recommended: false,
+                    can_be_reported: false,
+                    content: text("Buy now"),
+                    sponsor: tdlib::types::AdvertisementSponsor {
+                        url: String::new(),
+                        photo: None,
+                        info: info.to_owned(),
+                    },
+                    title: "Sponsor title".to_owned(),
+                    button_text: "Open".to_owned(),
+                    accent_color_id: 0,
+                    background_custom_emoji_id: 0,
+                    additional_info: String::new(),
+                },
+            )
+        };
+        let bubble: MessageBubble = glib::Object::new();
+
+        // The sponsor's info names the sender, else the title (c7e6d966).
+        bubble.update_from_sponsored_message(&sponsored("Ad by Example Inc."));
+        let sender = &bubble.imp().sender_label;
+        assert!(sender.is_visible());
+        assert_eq!(sender.label(), "Ad by Example Inc.");
+        assert!(!bubble.has_css_class("outgoing"));
+
+        bubble.update_from_sponsored_message(&sponsored(""));
+        assert_eq!(bubble.imp().sender_label.label(), "Sponsor title");
+    });
+}

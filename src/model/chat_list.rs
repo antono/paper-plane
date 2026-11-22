@@ -137,10 +137,6 @@ impl ChatList {
         self.n_items()
     }
 
-    pub(crate) fn session_(&self) -> model::ClientStateSession {
-        self.session().unwrap()
-    }
-
     pub(crate) fn fetch(&self) {
         utils::spawn(clone!(
             #[weak(rename_to = obj)]
@@ -219,13 +215,14 @@ impl ChatList {
     pub(crate) async fn delete(&self) -> anyhow::Result<()> {
         match self.list_type().0 {
             tdlib::enums::ChatList::Folder(tdlib::types::ChatListFolder { chat_folder_id }) => {
-                tdlib::functions::delete_chat_folder(
-                    chat_folder_id,
-                    Vec::new(),
-                    self.session_().client_().id(),
-                )
-                .await
-                .map_err(|e| anyhow::Error::msg(e.message))
+                let client_id = self
+                    .session()
+                    .and_then(|session| session.client())
+                    .map(|client| client.id())
+                    .ok_or_else(|| anyhow::Error::msg("The session of the chat list is closed"))?;
+                tdlib::functions::delete_chat_folder(chat_folder_id, Vec::new(), client_id)
+                    .await
+                    .map_err(|e| anyhow::Error::msg(e.message))
             }
             _ => Err(anyhow::Error::msg(gettext("Only folders can be deleted."))),
         }

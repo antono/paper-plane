@@ -740,8 +740,6 @@ impl MediaViewer {
             }
         }
 
-        self.update_navigation(entry_index);
-
         imp.active_index.set(entry_index);
 
         if let Some(session) = imp.session.upgrade() {
@@ -749,6 +747,11 @@ impl MediaViewer {
         }
 
         self.display_item(entry_index);
+
+        // After display_item: reconcile_pages derives the index from the
+        // previously displayed page, which would leave the buttons of that
+        // page.
+        self.update_navigation(entry_index);
 
         self.maybe_preload(entry_index);
     }
@@ -1009,5 +1012,88 @@ pub(crate) fn gtk_check() {
         viewer.close();
 
         drop(history);
+    });
+
+    eprintln!("media viewer: paging to older media and navigation");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let _history = model::ChatHistoryModel::new(&chat);
+        for id in 10..=11 {
+            new_message(&session, message(ME, id, DAY, 0, photo("")));
+        }
+        let entry = |id| {
+            let message = chat.message(id).unwrap();
+            ViewerEntry {
+                item: ViewerItem::from_message(&message).unwrap(),
+                message_id: id,
+            }
+        };
+        let ids = |viewer: &MediaViewer| -> Vec<MessageId> {
+            viewer
+                .imp()
+                .entries
+                .borrow()
+                .iter()
+                .map(|e| e.message_id)
+                .collect()
+        };
+
+        // Opened at photo 10; photo 11 is newer, from the loaded history.
+        let viewer: MediaViewer = glib::Object::new();
+        viewer.open(&gtk::Picture::new(), &chat, vec![entry(10)], 0);
+        let imp = viewer.imp();
+        assert_eq!(ids(&viewer), [10, 11]);
+        assert_eq!(imp.active_index.get(), 0);
+        // There may be older media: the previous button is shown.
+        assert!(imp.previous_button.is_visible());
+        assert!(imp.next_button.is_visible());
+
+        // A page of older media (newest first, with a non-media message) is
+        // prepended in chronological order; the displayed photo stays.
+        let older = |id, content| model::Message::new(&chat, message(ME, id, DAY, 0, content));
+        viewer.handle_media_page(
+            &session,
+            model::MediaSearchPage {
+                messages: vec![
+                    older(9, photo("")),
+                    older(8, text("no")),
+                    older(7, photo("")),
+                ],
+                next_from_message_id: 7,
+            },
+        );
+        assert_eq!(ids(&viewer), [7, 9, 10, 11]);
+        assert_eq!(imp.active_index.get(), 2);
+        assert!(imp.has_more.get());
+        assert_eq!(imp.next_older_id.get(), 7);
+
+        // Messages already shown are not added twice; the end of the media
+        // hides the previous button at the oldest photo.
+        viewer.handle_media_page(
+            &session,
+            model::MediaSearchPage {
+                messages: vec![older(9, photo(""))],
+                next_from_message_id: 0,
+            },
+        );
+        assert_eq!(ids(&viewer), [7, 9, 10, 11]);
+        assert!(!imp.has_more.get());
+
+        // The carousel settles on the oldest photo: it is displayed.
+        let oldest_page = imp.pages.borrow()[0].clone().expect("a page of photo 7");
+        let position = (0..imp.carousel.n_pages())
+            .find(|&i| imp.carousel.nth_page(i) == *oldest_page.upcast_ref::<gtk::Widget>())
+            .unwrap();
+        viewer.handle_page_changed(position);
+        assert_eq!(imp.active_index.get(), 0);
+        assert_eq!(imp.active_page.upgrade().as_ref(), Some(&oldest_page));
+        assert!(!imp.previous_button.is_visible());
+        assert!(imp.next_button.is_visible());
+        // Nothing before the oldest photo: navigating back stays.
+        viewer.navigate(-1);
+        assert_eq!(imp.active_index.get(), 0);
+        viewer.close();
     });
 }

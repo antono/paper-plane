@@ -998,5 +998,33 @@ pub(crate) fn gtk_check() {
 
         bar.set_property("chat", &without_draft);
         assert_eq!(text(&bar), "");
+
+        // Nobody writes to the Replies chat: it has a mute button instead of
+        // the composer (#467).
+        eprintln!("mute bar of the Replies chat");
+        let stack = |bar: &ChatActionBar| bar.imp().action_bar_stack.visible_child_name();
+        let mute_label = |bar: &ChatActionBar| bar.imp().mute_button.label();
+        add_user(&session, REPLIES);
+        let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
+        bar.set_property("chat", &replies);
+        assert_eq!(stack(&bar).as_deref(), Some("mute"));
+        assert_eq!(mute_label(&bar).as_deref(), Some(gettext("Mute").as_str()));
+
+        let mut muted = notification_settings();
+        muted.use_default_mute_for = false;
+        muted.mute_for = 137;
+        session.handle_update(tdlib::enums::Update::ChatNotificationSettings(
+            tdlib::types::UpdateChatNotificationSettings {
+                chat_id: REPLIES,
+                notification_settings: muted,
+            },
+        ));
+        bar.set_property("chat", &without_draft);
+        assert_eq!(stack(&bar).as_deref(), Some("entry"));
+        bar.set_property("chat", &replies);
+        assert_eq!(
+            mute_label(&bar).as_deref(),
+            Some(gettext("Unmute").as_str())
+        );
     });
 }

@@ -268,11 +268,6 @@ impl MediaViewerPage {
             return;
         };
 
-        let media = manager.media_file();
-
-        media.set_muted(is_animation);
-        media.set_loop(is_animation);
-
         imp.is_stream_bound.set(false);
         imp.picture.set_paintable(imp.placeholder.borrow().as_ref());
 
@@ -303,6 +298,10 @@ impl MediaViewerPage {
                     imp.video.set_media_stream(Some(media));
                     imp.video.set_visible(true);
 
+                    // Set on the prepared stream: before, a stream closed by
+                    // a previous stop() has no player to apply them to.
+                    media.set_muted(is_animation);
+                    media.set_loop(is_animation);
                     media.play();
                 }
             ),
@@ -422,4 +421,68 @@ pub(crate) fn gtk_check() {
         gtk::GraphicsOffloadEnabled::Enabled,
         "videos in the viewer are offloaded to the compositor"
     );
+
+    eprintln!("media viewer page: video playback");
+
+    crate::model::test_support::isolated(|| {
+        use crate::model::test_support::*;
+
+        let session = session();
+        let path = playback_manager::tests::silent_wav("viewer-video");
+        let mut video_file = file(2);
+        video_file.local.path = path.to_str().unwrap().to_owned();
+        video_file.local.is_downloading_completed = true;
+        video_file.local.downloaded_size = video_file.size;
+        let item = |is_animation| ViewerItem::Video {
+            file: video_file.clone(),
+            placeholder: None,
+            is_animation,
+        };
+        let manager = playback_manager::PlaybackManager::new();
+        let media = manager.media_file();
+        let context = glib::MainContext::ref_thread_default();
+        let wait_playing = || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !media.is_playing() && std::time::Instant::now() < deadline {
+                context.iteration(false);
+            }
+            assert!(
+                media.is_playing(),
+                "the video did not start: {:?}",
+                media.error()
+            );
+        };
+
+        // A displayed video plays with sound on the shared stream, bound to
+        // the video widget with its controls (c1eecd89).
+        let page: MediaViewerPage = glib::Object::new();
+        page.set_item(&session, item(false), Some(&manager));
+        let imp = page.imp();
+        assert!(
+            !imp.video.is_visible(),
+            "a video is shown before it is displayed"
+        );
+        page.activate();
+        wait_playing();
+        assert!(manager.is_current(path.to_str().unwrap()));
+        assert!(!media.is_muted());
+        assert!(!media.is_loop());
+        assert!(imp.video.is_visible());
+        assert_eq!(imp.video.media_stream().as_ref(), Some(media.upcast_ref()));
+        assert!(!imp.picture.is_visible());
+
+        // Leaving the page stops the video and shows the preview again.
+        page.deactivate();
+        assert!(!manager.is_current(path.to_str().unwrap()));
+        assert!(!imp.video.is_visible());
+        assert!(imp.picture.is_visible());
+
+        // Animations loop and stay muted.
+        page.set_item(&session, item(true), Some(&manager));
+        page.activate();
+        wait_playing();
+        assert!(media.is_muted());
+        assert!(media.is_loop());
+        page.deactivate();
+    });
 }

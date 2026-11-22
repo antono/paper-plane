@@ -1,0 +1,11 @@
+{
+  "auth": "ready",
+  "me": { "id": 137, "name": "Test User" },
+  "hang_at_exit": true,
+  "chats": [
+    {
+      "with": { "id": 1001, "name": "Alice Example" },
+      "messages": [{ "id": 1, "text": "Hi, this is Alice", "ago": 60 }]
+    }
+  ]
+}

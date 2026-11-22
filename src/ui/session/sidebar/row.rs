@@ -826,5 +826,16 @@ pub(crate) fn gtk_check() {
         assert!(!row.imp().secret_chat_icon.is_visible());
         assert!(!title.has_css_class("accent"));
         assert_eq!(title.css_classes(), classes_before);
+
+        // In the Replies chat the sender of the last message is the original
+        // author of the reply, and own messages have no sender (#467).
+        eprintln!("sender labels in the Replies chat");
+        add_user(&session, REPLIES);
+        let replies = add_private_chat(&session, REPLIES, REPLIES, "Replies");
+        let reply = model::Message::new(&replies, replies_reply(1, 42));
+        let label = sender_label(reply).expect("a sender label");
+        assert!(label.contains("42"), "{label}");
+        let own = model::Message::new(&replies, message(REPLIES, 2, DAY, 0, text("mine")));
+        assert_eq!(sender_label(own), None);
     });
 }

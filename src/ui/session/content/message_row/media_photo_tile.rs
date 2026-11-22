@@ -150,6 +150,19 @@ impl Default for MediaPhotoTile {
 
 /// A tile of a media album (or a single media message) showing a photo.
 impl MediaPhotoTile {
+    /// Whether the photo waits for the user to download it.
+    pub(crate) fn offers_download(&self) -> bool {
+        self.imp().download_button.is_visible()
+    }
+
+    /// What clicking a photo that is not downloaded does.
+    pub(crate) fn click_download(&self) {
+        let imp = self.imp();
+        if imp.loader.status() == FileStatus::CanBeDownloaded {
+            imp.loader.request_download();
+        }
+    }
+
     /// Shows the given photo.
     ///
     /// The photo size is chosen based on the scale factor and re-evaluated

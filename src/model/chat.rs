@@ -340,7 +340,7 @@ impl Chat {
     /// The id of the TDLib client of this chat, or an error if its session is
     /// gone. Requests of a history that is still loading can outlive the
     /// session, e.g. while the application quits.
-    fn client_id(&self) -> Result<crate::types::ClientId, tdlib::types::Error> {
+    pub(crate) fn client_id(&self) -> Result<crate::types::ClientId, tdlib::types::Error> {
         self.session()
             .and_then(|session| session.client())
             .map(|client| client.id())
@@ -606,7 +606,7 @@ impl Chat {
 
         let result = if chat_id == 0 || chat_id == self.id() {
             self.fetch_message(message_id).await.map(Some)
-        } else if let Some(chat) = self.session_().try_chat(chat_id) {
+        } else if let Some(chat) = self.session().and_then(|session| session.try_chat(chat_id)) {
             chat.fetch_message(message_id).await.map(Some)
         } else {
             // The chat doesn't exist anymore, so the message doesn't either
@@ -705,26 +705,16 @@ impl Chat {
                 vec![message.id()],
                 None,
                 true,
-                self.session_().client_().id(),
+                self.client_id()?,
             )
             .await?;
         }
 
-        tdlib::functions::toggle_chat_is_marked_as_unread(
-            self.id(),
-            false,
-            self.session_().client_().id(),
-        )
-        .await
+        tdlib::functions::toggle_chat_is_marked_as_unread(self.id(), false, self.client_id()?).await
     }
 
     pub(crate) async fn mark_as_unread(&self) -> Result<(), tdlib::types::Error> {
-        tdlib::functions::toggle_chat_is_marked_as_unread(
-            self.id(),
-            true,
-            self.session_().client_().id(),
-        )
-        .await
+        tdlib::functions::toggle_chat_is_marked_as_unread(self.id(), true, self.client_id()?).await
     }
 }
 
@@ -733,12 +723,97 @@ mod tests {
     use super::*;
     use crate::model::test_support::*;
 
+    /// The Replies chat has one id on the production and one on the test DC
+    /// (#467).
+    #[test]
+    fn replies_chat_on_both_data_centers() {
+        isolated(|| {
+            let session = session();
+            add_user(&session, REPLIES);
+            assert!(add_private_chat(&session, REPLIES, REPLIES, "Replies").is_replies_chat());
+            add_user(&session, 708513);
+            assert!(add_private_chat(&session, 708513, 708513, "Replies").is_replies_chat());
+            assert!(!add_chat(&session, ME).is_replies_chat());
+        });
+    }
+
+    /// The message cache holds its messages weakly: a message lives while
+    /// something shows it, and the same object is returned meanwhile
+    /// (78359245).
+    #[test]
+    fn the_message_cache_holds_messages_weakly() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+            let history = model::ChatHistoryModel::new(&chat);
+            new_message(&session, message(ME, 1, DAY, 0, text("one")));
+            let first = chat.message(1).expect("message 1 is cached");
+            assert_eq!(chat.message(1).as_ref(), Some(&first));
+
+            // Nothing shows message 1 any more: it is gone from the cache,
+            // while message 2, shown by another history, stays.
+            drop(first);
+            drop(history);
+            let _other = model::ChatHistoryModel::new(&chat);
+            new_message(&session, message(ME, 2, DAY, 0, text("two")));
+            assert!(chat.message(1).is_none(), "the cache kept message 1 alive");
+            assert!(chat.message(2).is_some(), "a shown message is not kept");
+        });
+    }
+
+    /// Messages that TDLib only drops from its local cache are not deleted
+    /// from the chat; deleted ones are (78359245).
+    #[test]
+    fn messages_dropped_from_the_tdlib_cache_are_not_deleted() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+            let _history = model::ChatHistoryModel::new(&chat);
+            new_message(&session, message(ME, 1, DAY, 0, text("one")));
+            new_message(&session, message(ME, 2, DAY, 0, text("two")));
+
+            let deleted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            chat.connect_closure(
+                "deleted-message",
+                false,
+                glib::closure_local!(
+                    #[strong]
+                    deleted,
+                    move |_: model::Chat, message: model::Message| {
+                        deleted.borrow_mut().push(message.id())
+                    }
+                ),
+            );
+            let delete = |id, from_cache: bool| {
+                session.handle_update(tdlib::enums::Update::DeleteMessages(
+                    tdlib::types::UpdateDeleteMessages {
+                        chat_id: ME,
+                        message_ids: vec![id],
+                        is_permanent: !from_cache,
+                        from_cache,
+                    },
+                ))
+            };
+
+            delete(1, true);
+            assert!(
+                deleted.borrow().is_empty(),
+                "a message dropped from the cache was deleted"
+            );
+            assert!(chat.message(1).is_none());
+
+            delete(2, false);
+            assert_eq!(*deleted.borrow(), [2]);
+        });
+    }
+
     /// Requests of a chat whose session is gone fail instead of panicking.
     #[test]
     fn requests_after_the_session_is_gone_fail() {
         isolated(|| {
             let session = session();
             let chat = add_chat(&session, ME);
+            let message = model::Message::new(&chat, message(ME, 1, DAY, 0, text("hi")));
             drop(session);
             assert!(chat.session().is_none());
 
@@ -748,6 +823,40 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.code, 500);
             assert!(context.block_on(chat.fetch_message(1)).is_err());
+
+            // The other requests started after quitting fail too.
+            assert_eq!(
+                context.block_on(chat.mark_as_unread()).unwrap_err().code,
+                500
+            );
+            assert_eq!(context.block_on(chat.mark_as_read()).unwrap_err().code, 500);
+            assert_eq!(
+                context
+                    .block_on(model::SponsoredMessage::request(&chat))
+                    .unwrap_err()
+                    .code,
+                500
+            );
+            assert_eq!(
+                context.block_on(message.delete(true)).unwrap_err().code,
+                500
+            );
+            assert_eq!(
+                context
+                    .block_on(message.available_reactions())
+                    .unwrap_err()
+                    .code,
+                500
+            );
+            // A reply into another chat is not found, not a panic.
+            assert!(matches!(
+                context.block_on(chat.fetch_reply_target(42, 1)),
+                Ok(None)
+            ));
+            // Fire-and-forget requests give up quietly.
+            message.fetch_properties();
+            message.toggle_reaction("👍");
+            while context.iteration(false) {}
         });
     }
 }

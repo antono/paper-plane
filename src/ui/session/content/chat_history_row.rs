@@ -74,21 +74,8 @@ mod imp {
             let chat_history = utils::ancestor::<_, ui::ChatHistory>(&*self.obj());
 
             if let Some(item) = &*self.item.borrow() {
-                if let Some(item) = item.downcast_ref::<model::ChatHistoryItem>() {
-                    if let model::ChatHistoryItemType::Message(message) = item.type_() {
-                        // A media album is displayed by one row on behalf of
-                        // all of its messages, which must all be marked as
-                        // viewed.
-                        if let Some(album) = message.media_album() {
-                            for member in album.messages() {
-                                op(&chat_history, member.id());
-                            }
-                        } else {
-                            op(&chat_history, message.id());
-                        }
-                    }
-                } else if let Some(message) = item.downcast_ref::<model::SponsoredMessage>() {
-                    op(&chat_history, message.message_id());
+                for message_id in super::viewed_message_ids(item) {
+                    op(&chat_history, message_id);
                 }
             }
         }
@@ -200,5 +187,51 @@ impl ChatHistoryRow {
             self.set_child(Some(&child));
             child
         }
+    }
+}
+
+/// The ids of the messages a row shows, which are viewed while it is mapped.
+fn viewed_message_ids(item: &glib::Object) -> Vec<i64> {
+    if let Some(item) = item.downcast_ref::<model::ChatHistoryItem>() {
+        if let model::ChatHistoryItemType::Message(message) = item.type_() {
+            // A media album is displayed by one row on behalf of all of its
+            // messages, which must all be marked as viewed.
+            return match message.media_album() {
+                Some(album) => album.messages().iter().map(|m| m.id()).collect(),
+                None => vec![message.id()],
+            };
+        }
+    } else if let Some(message) = item.downcast_ref::<model::SponsoredMessage>() {
+        return vec![message.message_id()];
+    }
+    vec![]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::test_support::*;
+
+    /// A row of an album marks all of its members as viewed (eaa45b1e).
+    #[test]
+    fn album_rows_view_all_members() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+            let history = model::ChatHistoryModel::new(&chat);
+            new_message(&session, message(ME, 1, DAY, 0, text("alone")));
+            for id in 2..=4 {
+                new_message(&session, message(ME, id, DAY, 77, photo("")));
+            }
+
+            let mut viewed: Vec<Vec<i64>> = (0..history.n_items())
+                .filter_map(|i| history.item(i))
+                .map(|item| viewed_message_ids(&item))
+                .filter(|ids| !ids.is_empty())
+                .collect();
+            viewed.iter_mut().for_each(|ids| ids.sort());
+            viewed.sort();
+            assert_eq!(viewed, [vec![1], vec![2, 3, 4]]);
+        });
     }
 }

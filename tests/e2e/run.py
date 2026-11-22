@@ -130,6 +130,8 @@ class App:
                 state[fields[0]][int(fields[1])] = fields[2]
             elif fields[0] == "reply":
                 state["reply"].append(fields[1])
+            elif fields[0] == "search":
+                state.setdefault("search-results", []).append(fields[1])
             else:
                 state[fields[0]] = fields[1:]
         return state
@@ -383,6 +385,32 @@ def test_media_replies_reactions_and_permissions(app):
     app.assert_all_requests_supported()
 
 
+def test_photos_download_on_click_without_auto_download(app):
+    """With automatic downloads off, a photo is not downloaded until it is
+    clicked; then it is downloaded and shown (7679e134)."""
+    app.wait_until_logged_in()
+    app.action("auto-set-boolean", "('auto-download-media', false)")
+    app.open_chat(1003)
+    app.wait_for(
+        "the photo offering a download",
+        lambda: int(app.state().get("download-offers", ["0"])[0]) >= 1,
+    )
+    time.sleep(1)
+    assert not app.requests("downloadFile"), "downloaded without a click"
+    assert int(app.state()["pictures"][0]) == 0, "a photo is shown without its file"
+
+    app.action("auto-download-media")
+    downloads = app.wait_for("the photo download", lambda: app.requests("downloadFile"))
+    assert downloads[0]["request"]["file_id"] == 103001, downloads
+    app.wait_for(
+        "the photo on screen",
+        lambda: (s := app.state()) and int(s["pictures"][0]) >= 1
+        and s["download-offers"] == ["0"] and s,
+    )
+    app.quit()
+    app.assert_all_requests_supported()
+
+
 def test_runs_in_the_background(app):
     """With run-in-background (the default), closing the window keeps the
     application running without an open chat; activating it again shows the
@@ -479,15 +507,237 @@ def test_long_chat_opens_at_the_bottom(app):
     app.assert_all_requests_supported()
 
 
+def history_ids(app, chat_id):
+    """The loaded message ids of the open chat, once it is chat_id."""
+    s = app.state()
+    if s.get("open-chat", [None])[0] != str(chat_id) or "scroll" not in s:
+        return None
+    return s, [id_ for id_, _ in s["messages"]]
+
+
+def test_scrolling_loads_older_messages(app):
+    """Scrolling to the top of a long chat loads older messages, and the
+    scroll-down button brings the view back to the bottom."""
+    app.wait_until_logged_in()
+    app.open_chat(1005)
+    state, ids = app.wait_for(
+        "the history of Erin's chat at the bottom",
+        lambda: (r := history_ids(app, 1005)) and r[1] and at_bottom(r[0]) and r,
+    )
+    oldest = min(ids)
+
+    app.action("auto-scroll", "0.0")
+    app.wait_for(
+        "older messages loaded on scroll",
+        lambda: (r := history_ids(app, 1005)) and min(r[1]) < oldest and r,
+    )
+    assert not at_bottom(app.state()), "scrolling up did not leave the bottom"
+
+    app.action("auto-history-action", "('scroll-down', int64 0)")
+    app.wait_for(
+        "the view back at the bottom",
+        lambda: (r := history_ids(app, 1005)) and at_bottom(r[0]) and r,
+    )
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_jump_to_message_and_back_to_the_newest(app):
+    """Jumping to an old message (as a reply does) loads the history around
+    it; the scroll-down button then re-opens the history at the newest
+    message, at the bottom."""
+    app.wait_until_logged_in()
+    app.open_chat(1005)
+    app.wait_for(
+        "the history of Erin's chat",
+        lambda: (r := history_ids(app, 1005)) and 300 in r[1] and r,
+    )
+
+    app.action("auto-history-action", "('jump-to-message', int64 5)")
+    app.wait_for(
+        "the history anchored at message 5",
+        lambda: (r := history_ids(app, 1005)) and r[0]["history"][1] == "5" and 5 in r[1] and r,
+    )
+
+    app.action("auto-history-action", "('scroll-down', int64 0)")
+    state, ids = app.wait_for(
+        "the history at the newest message",
+        lambda: (r := history_ids(app, 1005)) and 300 in r[1] and at_bottom(r[0]) and r,
+    )
+    assert 5 not in ids, "the old messages are still loaded"
+    # Re-opened at the newest message: no anchor
+    assert state["history"] == ["true", "0"], state["history"]
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_scroll_down_jumps_to_the_first_unread(app):
+    """In a chat with unread messages, the scroll-down button returns to the
+    first unread message, not to the newest one."""
+    app.wait_until_logged_in()
+    app.open_chat(1004)
+    # 100 of 151 messages are unread: the history is anchored at the last
+    # read message, 51.
+    state, _ = app.wait_for(
+        "the history of Dave's chat at the first unread message",
+        lambda: (r := history_ids(app, 1004)) and 51 in r[1] and r,
+    )
+    assert state["history"][1] == "51", state["history"]
+
+    app.action("auto-history-action", "('jump-to-message', int64 5)")
+    app.wait_for(
+        "the history around message 5",
+        lambda: (r := history_ids(app, 1004)) and r[0]["history"][1] == "5" and 5 in r[1] and r,
+    )
+
+    app.action("auto-history-action", "('scroll-down', int64 0)")
+    state, ids = app.wait_for(
+        "the history anchored at the first unread message again",
+        lambda: (r := history_ids(app, 1004)) and r[0]["history"][1] == "51" and 51 in r[1] and r,
+    )
+    # Newer messages may follow by scrolling; the anchor tells the first
+    # unread message (51) from the newest one (go_to_newest).
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_search_finds_chats_contacts_and_public_chats(app):
+    """The sidebar search asks TDLib for local and server chats, contacts
+    and public chats, and lists them by section (c7e6d966)."""
+    app.wait_until_logged_in()
+    app.wait_for("the chats", lambda: len(app.chat_rows()) == 2)
+    app.action("auto-search", "'alice'")
+    state = app.wait_for(
+        "the search results",
+        lambda: (s := app.state()) and "Alice News" in s.get("search-results", []) and s,
+    )
+    results = state["search-results"]
+    assert "Alice Example" in results, results
+    assert "Bob Example" not in results, results
+    # Alice's chat is found locally, so the server and contact searches do
+    # not list her again; the public chat is in its own section.
+    assert results.count("Alice Example") == 1, results
+    assert "#Global" in results, results
+    assert results.index("#Global") < results.index("Alice News"), results
+    for request in ("searchChats", "searchChatsOnServer", "searchContacts", "searchPublicChats"):
+        assert app.requests(request), f"{request} was not requested"
+        assert app.requests(request)[0]["request"]["query"] == "alice"
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_register_a_new_account(app):
+    """A new account is registered with the name typed in (c7e6d966)."""
+    app.wait_for("the application on the bus", app._registered)
+    app.wait_for(
+        "the registration",
+        lambda: app.state().get("client-state", [""])[0] == "ClientStateAuth",
+    )
+    app.action("auto-submit-registration", "('Ada', 'Lovelace')")
+    app.wait_for(
+        "the session",
+        lambda: app.state().get("client-state", [""])[0] == "ClientStateSession",
+    )
+    request = app.requests("registerUser")[0]["request"]
+    assert (request["first_name"], request["last_name"]) == ("Ada", "Lovelace"), request
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def png_file(directory):
+    """Writes a small PNG image and returns its path."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    width, height = 4, 3
+    raw = b"".join(b"\x00" + b"\xff\x80\x00" * width for _ in range(height))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    path = pathlib.Path(directory) / "picture.png"
+    path.write_bytes(png)
+    return path
+
+
+def test_replies_photos_and_files_are_sent(app):
+    """A reply is sent with the message it replies to, and photos and files
+    are sent as photos and documents (c7e6d966, 1e1e3ad7)."""
+    app.wait_until_logged_in()
+    app.open_chat(1001)
+    app.wait_for("Alice's messages", lambda: len(app.state()["messages"]) == 3)
+
+    app.action("auto-history-action", "('reply', int64 1)")
+    app.action("auto-send-text", "'Replying to you'")
+    sent = app.wait_for("the reply", lambda: app.requests("sendMessage"))
+    reply_to = sent[0]["request"].get("reply_to") or {}
+    assert reply_to.get("message_id") == 1, sent[0]["request"]
+    app.wait_for(
+        "the reply preview",
+        lambda: any("Hi, this is Alice" in r for r in app.state()["reply"]),
+    )
+
+    picture = png_file(app.out)
+    app.action("auto-send-file", f"('{picture}', false)")
+    photos = app.wait_for(
+        "the photo",
+        lambda: [r for r in app.requests("sendMessage")
+                 if r["request"]["input_message_content"]["@type"] == "inputMessagePhoto"],
+    )
+    content = photos[0]["request"]["input_message_content"]
+    assert content["photo"]["photo"]["path"] == str(picture), content
+    assert (content["photo"]["width"], content["photo"]["height"]) == (4, 3), content
+
+    app.action("auto-send-file", f"('{picture}', true)")
+    documents = app.wait_for(
+        "the file",
+        lambda: [r for r in app.requests("sendMessage")
+                 if r["request"]["input_message_content"]["@type"] == "inputMessageDocument"],
+    )
+    content = documents[0]["request"]["input_message_content"]
+    assert content["document"]["document"]["path"] == str(picture), content
+    app.wait_for(
+        "the sent photo and file in the history",
+        lambda: (texts := [t for _, t in app.state()["messages"]])
+        and any("picture.png" in t for t in texts) and len(texts) >= 6,
+    )
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_quits_although_tdlib_hangs_at_exit(app):
+    """The teardown of libtdjson can hang the exit of the process; the
+    application ends it with _exit after its run, so it quits anyway, with
+    its exit code (7679e134)."""
+    app.wait_until_logged_in()
+    app.wait_for("the chats", lambda: len(app.chat_rows()) == 1)
+    app.quit()
+    app.assert_all_requests_supported()
+
+
 TESTS = [
     ("chat-list-open-and-send", "two-chats.json", test_chat_list_open_and_send),
     ("login-with-phone-number", "login.json", test_login_with_phone_number),
     ("survives-failing-view-messages", "view-messages-fails.json", test_survives_failing_view_messages),
     ("survives-unsupported-auth-state", "email-login.json", test_survives_unsupported_auth_state),
     ("media-replies-reactions-and-permissions", "rich-chat.json", test_media_replies_reactions_and_permissions),
+    ("photos-download-on-click-without-auto-download", "rich-chat.json", test_photos_download_on_click_without_auto_download),
     ("runs-in-the-background", "two-chats.json", test_runs_in_the_background),
     ("sending-reveals-the-message", "long-chat.json", test_sending_reveals_the_message),
     ("long-chat-opens-at-the-bottom", "long-read-chat.json", test_long_chat_opens_at_the_bottom),
+    ("scrolling-loads-older-messages", "long-read-chat.json", test_scrolling_loads_older_messages),
+    ("jump-to-message-and-back-to-the-newest", "long-read-chat.json", test_jump_to_message_and_back_to_the_newest),
+    ("scroll-down-jumps-to-the-first-unread", "long-chat.json", test_scroll_down_jumps_to_the_first_unread),
+    ("search-finds-chats-contacts-and-public-chats", "search.json", test_search_finds_chats_contacts_and_public_chats),
+    ("register-a-new-account", "registration.json", test_register_a_new_account),
+    ("replies-photos-and-files-are-sent", "two-chats.json", test_replies_photos_and_files_are_sent),
+    ("quits-although-tdlib-hangs-at-exit", "hang-at-exit.json", test_quits_although_tdlib_hangs_at_exit),
 ]
 
 
@@ -511,6 +761,8 @@ def main():
             test(app)
         except (Failure, AssertionError) as e:
             error = e or "assertion failed"
+        except Exception as e:  # noqa: BLE001 - a broken expectation fails the test
+            error = f"{type(e).__name__}: {e}"
         diagnostics = app.diagnostics() if error else ""
         log = app.close(args.artifacts)
         panics = [l for l in log.splitlines() if "panicked" in l]

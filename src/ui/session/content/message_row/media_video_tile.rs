@@ -535,9 +535,11 @@ impl MediaVideoTile {
 
         if imp.media.borrow().is_none() {
             // The video has not been decoded yet. Create the stream and
-            // start playback as soon as it is ready.
-            imp.pending_play.set(true);
+            // start playback as soon as it is ready. Requested after the
+            // stream is created, which resets the pending playback.
             self.maybe_prepare_media();
+            imp.pending_play.set(true);
+            self.maybe_start_playback();
             return;
         }
 
@@ -820,4 +822,82 @@ fn format_duration(time: i64) -> String {
     } else {
         format!("{minutes}:{seconds:02}")
     }
+}
+
+/// Checks of the inline playback of animations (eaa45b1e) that need GTK,
+/// see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+    use crate::ui::session::playback_manager;
+
+    eprintln!("animations play inline in their tile");
+
+    isolated(|| {
+        let session = session();
+        let path = playback_manager::tests::silent_wav("animation");
+        let mut animation_file = file(700);
+        animation_file.local.path = path.to_str().unwrap().to_owned();
+        animation_file.local.is_downloading_completed = true;
+        animation_file.local.downloaded_size = animation_file.size;
+        let animation = tdlib::types::Animation {
+            duration: 1,
+            width: 320,
+            height: 240,
+            file_name: "loop.mp4".to_owned(),
+            mime_type: "video/mp4".to_owned(),
+            has_stickers: false,
+            minithumbnail: None,
+            thumbnail: None,
+            animation: animation_file,
+        };
+
+        let tile = MediaVideoTile::default();
+        tile.set_animation(&session, &animation);
+        let imp = tile.imp();
+        imp.visible_on_screen.set(true);
+        assert!(imp.media.borrow().is_none(), "decoded before it was played");
+
+        let context = glib::MainContext::ref_thread_default();
+        let wait = |playing: bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let media = imp.media.borrow().clone();
+                if media.as_ref().is_some_and(|m| m.is_playing() == playing)
+                    || std::time::Instant::now() > deadline
+                {
+                    return media;
+                }
+                context.iteration(false);
+            }
+        };
+
+        // A click creates the stream and plays it, muted and looping, as
+        // soon as it is ready.
+        tile.toggle_playback();
+        let media = wait(true).expect("a media stream");
+        assert!(
+            media.is_playing(),
+            "the animation did not start: {:?}",
+            media.error()
+        );
+        assert!(media.is_muted());
+        assert!(media.is_loop());
+
+        // Another click pauses it, and it stays paused.
+        tile.toggle_playback();
+        assert!(!media.is_playing());
+        assert!(imp.user_paused.get());
+        tile.maybe_start_playback();
+        assert!(!media.is_playing());
+
+        // Played again, it pauses when scrolled out of sight.
+        tile.toggle_playback();
+        wait(true);
+        assert!(media.is_playing());
+        tile.pause_for_invisibility();
+        assert!(!media.is_playing());
+
+        tile.close_media();
+    });
 }

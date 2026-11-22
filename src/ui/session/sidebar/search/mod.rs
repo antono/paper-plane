@@ -151,6 +151,31 @@ impl Search {
         self.imp().session.upgrade()
     }
 
+    /// Types `query` into the search entry, as a user would.
+    pub(crate) fn set_query(&self, query: &str) {
+        self.imp().search_entry.set_text(query);
+    }
+
+    /// The results as listed: the chats and users by name, the sections by
+    /// their kind (`#Chats`, `#Global`, …).
+    pub(crate) fn result_names(&self) -> Vec<String> {
+        let selection = &*self.imp().selection;
+        (0..selection.n_items())
+            .filter_map(|i| selection.item(i))
+            .map(|item| {
+                if let Some(chat) = item.downcast_ref::<model::Chat>() {
+                    chat.title()
+                } else if let Some(user) = item.downcast_ref::<model::User>() {
+                    crate::strings::user_display_name(user, false)
+                } else if let Some(section) = item.downcast_ref::<Section>() {
+                    format!("#{:?}", section.section_type())
+                } else {
+                    format!("?{}", item.type_().name())
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn set_session(&self, session: Option<&model::ClientStateSession>) {
         if self.session().as_ref() == session {
             return;
@@ -203,7 +228,8 @@ impl Search {
         }
 
         // Search chats locally (or get the recently found chats if the query is empty)
-        match tdlib::functions::search_chats(query.clone(), None, 30, session.client_().id()).await {
+        match tdlib::functions::search_chats(query.clone(), None, 30, session.client_().id()).await
+        {
             Ok(tdlib::enums::Chats::Chats(mut data)) if !data.chat_ids.is_empty() => {
                 list.append(&Section::new(if query.is_empty() {
                     SectionType::Recent

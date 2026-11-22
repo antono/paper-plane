@@ -222,9 +222,7 @@ impl ChatHistoryModel {
 
         imp.is_loading_older.set(true);
 
-        let result = chat
-            .get_chat_history(from_message_id, 0, limit)
-            .await;
+        let result = chat.get_chat_history(from_message_id, 0, limit).await;
 
         imp.is_loading_older.set(false);
 
@@ -376,10 +374,10 @@ impl ChatHistoryModel {
         // is nothing newer, so new messages go straight into the list instead
         // of waiting for a load that returns nothing, which only a further
         // scroll would trigger.
-        let reached_newest = self
-            .try_chat()?
-            .last_message()
-            .is_some_and(|last| messages.iter().any(|m| m.id() >= last.id()));
+        let reached_newest = reaches_newest(
+            self.try_chat()?.last_message().map(|m| m.id()),
+            messages.iter().map(|m| m.id()),
+        );
 
         let mut added = 0usize;
         let mut swaps: Vec<(model::Message, model::Message)> = Vec::new();
@@ -999,6 +997,15 @@ fn message_ordering(list: &VecDeque<model::ChatHistoryItem>, message: &model::Me
     })
 }
 
+/// Whether a batch of loaded messages reaches the chat's last message, so
+/// that nothing newer is left to load.
+fn reaches_newest(
+    last_message_id: Option<MessageId>,
+    loaded: impl IntoIterator<Item = MessageId>,
+) -> bool {
+    last_message_id.is_some_and(|last| loaded.into_iter().any(|id| id >= last))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1070,6 +1077,16 @@ mod tests {
             ));
             assert_eq!(model.find_message_position(1), None);
         });
+    }
+
+    #[test]
+    fn loading_the_last_message_reaches_the_newest() {
+        assert!(reaches_newest(Some(5), [7, 6, 5]));
+        // The last message itself is the newest one: nothing newer to load
+        assert!(reaches_newest(Some(5), [5, 4, 3]));
+        assert!(!reaches_newest(Some(5), [4, 3]));
+        assert!(!reaches_newest(None, [4, 3]));
+        assert!(!reaches_newest(Some(5), []));
     }
 
     #[test]

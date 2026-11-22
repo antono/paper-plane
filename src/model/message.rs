@@ -205,12 +205,10 @@ impl Message {
             self,
             async move {
                 let chat = obj.chat_();
-                match tdlib::functions::get_message_properties(
-                    chat.id(),
-                    obj.id(),
-                    chat.session_().client_().id(),
-                )
-                .await
+                let Ok(client_id) = chat.client_id() else {
+                    return;
+                };
+                match tdlib::functions::get_message_properties(chat.id(), obj.id(), client_id).await
                 {
                     Ok(tdlib::enums::MessageProperties::MessageProperties(properties)) => {
                         obj.set_can_be_edited(properties.can_be_edited);
@@ -239,7 +237,7 @@ impl Message {
             chat.id(),
             self.id(),
             8,
-            chat.session_().client_().id(),
+            chat.client_id()?,
         )
         .await?;
 
@@ -274,13 +272,8 @@ impl Message {
 
     pub(crate) async fn delete(&self, revoke: bool) -> Result<(), tdlib::types::Error> {
         let chat = self.chat_();
-        tdlib::functions::delete_messages(
-            chat.id(),
-            vec![self.id()],
-            revoke,
-            chat.session_().client_().id(),
-        )
-        .await
+        tdlib::functions::delete_messages(chat.id(), vec![self.id()], revoke, chat.client_id()?)
+            .await
     }
 
     /// Adds a reaction with the given emoji to this message, or removes it if
@@ -306,7 +299,9 @@ impl Message {
             async move {
                 let emoji = emoji_owned;
                 let chat = obj.chat_();
-                let client_id = chat.session_().client_().id();
+                let Ok(client_id) = chat.client_id() else {
+                    return;
+                };
                 let reaction_type =
                     tdlib::enums::ReactionType::Emoji(tdlib::types::ReactionTypeEmoji {
                         emoji: emoji.to_string(),

@@ -35,7 +35,11 @@ use crate::utils;
 pub(crate) fn output_dir() -> std::path::PathBuf {
     let dir = std::env::var_os("PAPER_PLANE_AUTOMATION_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| glib::user_cache_dir().join("paper-plane").join("automation"));
+        .unwrap_or_else(|| {
+            glib::user_cache_dir()
+                .join("paper-plane")
+                .join("automation")
+        });
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("Could not create {}: {e:?}", dir.display());
     }
@@ -90,32 +94,44 @@ impl Application {
             output_dir().display()
         );
 
-        self.add_auto_action("auto-screenshot", Some(glib::VariantTy::STRING), |app, p| {
-            let name = p
-                .and_then(|p| p.get::<String>())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "screenshot".to_owned());
-            app.auto_screenshot(&name);
-        });
+        self.add_auto_action(
+            "auto-screenshot",
+            Some(glib::VariantTy::STRING),
+            |app, p| {
+                let name = p
+                    .and_then(|p| p.get::<String>())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| "screenshot".to_owned());
+                app.auto_screenshot(&name);
+            },
+        );
         self.add_auto_action("auto-state", None, |app, _| app.auto_state());
         self.add_auto_action("auto-list-chats", None, |app, _| app.auto_list_chats());
-        self.add_auto_action("auto-open-chat", Some(glib::VariantTy::INT64), |app, p| {
-            match p.and_then(|p| p.get::<i64>()) {
+        self.add_auto_action(
+            "auto-open-chat",
+            Some(glib::VariantTy::INT64),
+            |app, p| match p.and_then(|p| p.get::<i64>()) {
                 Some(chat_id) => app.auto_open_chat(chat_id),
                 None => log::warn!("auto-open-chat: missing chat id"),
-            }
-        });
-        self.add_auto_action("auto-send-text", Some(glib::VariantTy::STRING), |app, p| {
-            match p.and_then(|p| p.get::<String>()) {
+            },
+        );
+        self.add_auto_action(
+            "auto-send-text",
+            Some(glib::VariantTy::STRING),
+            |app, p| match p.and_then(|p| p.get::<String>()) {
                 Some(text) => app.auto_send_text(text),
                 None => log::warn!("auto-send-text: missing text"),
-            }
-        });
-        self.add_auto_action("auto-submit-phone", Some(glib::VariantTy::STRING), |app, p| {
-            if let Some(phone) = p.and_then(|p| p.get::<String>()) {
-                app.auto_submit_phone(phone);
-            }
-        });
+            },
+        );
+        self.add_auto_action(
+            "auto-submit-phone",
+            Some(glib::VariantTy::STRING),
+            |app, p| {
+                if let Some(phone) = p.and_then(|p| p.get::<String>()) {
+                    app.auto_submit_phone(phone);
+                }
+            },
+        );
         self.add_auto_action(
             "auto-set-boolean",
             Some(glib::VariantTy::new("(sb)").unwrap()),
@@ -135,27 +151,80 @@ impl Application {
                 window.close();
             }
         });
-        self.add_auto_action("auto-react", Some(glib::VariantTy::new("(xs)").unwrap()), |app, p| {
-            match p.and_then(|p| p.get::<(i64, String)>()) {
+        self.add_auto_action(
+            "auto-react",
+            Some(glib::VariantTy::new("(xs)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(i64, String)>()) {
                 Some((message_id, emoji)) => match app.open_chat_message(message_id) {
                     Some(message) => message.toggle_reaction(&emoji),
                     None => log::warn!("auto-react: message {message_id} is not loaded"),
                 },
                 None => log::warn!("auto-react: missing parameters"),
+            },
+        );
+        self.add_auto_action(
+            "auto-fetch-properties",
+            Some(glib::VariantTy::INT64),
+            |app, p| {
+                match p
+                    .and_then(|p| p.get::<i64>())
+                    .and_then(|id| app.open_chat_message(id))
+                {
+                    // What opening the context menu of the message does
+                    Some(message) => message.fetch_properties(),
+                    None => log::warn!("auto-fetch-properties: message not loaded"),
+                }
+            },
+        );
+        self.add_auto_action(
+            "auto-scroll",
+            Some(glib::VariantTy::DOUBLE),
+            |app, p| match p.and_then(|p| p.get::<f64>()) {
+                Some(fraction) => app.auto_scroll(fraction),
+                None => log::warn!("auto-scroll: missing fraction"),
+            },
+        );
+        self.add_auto_action(
+            "auto-history-action",
+            Some(glib::VariantTy::new("(sx)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(String, i64)>()) {
+                Some((name, message_id)) => app.auto_history_action(&name, message_id),
+                None => log::warn!("auto-history-action: missing parameters"),
+            },
+        );
+        self.add_auto_action("auto-download-media", None, |app, _| {
+            app.auto_download_media()
+        });
+        self.add_auto_action("auto-search", Some(glib::VariantTy::STRING), |app, p| {
+            if let Some(query) = p.and_then(|p| p.get::<String>()) {
+                app.auto_search(&query);
             }
         });
-        self.add_auto_action("auto-fetch-properties", Some(glib::VariantTy::INT64), |app, p| {
-            match p.and_then(|p| p.get::<i64>()).and_then(|id| app.open_chat_message(id)) {
-                // What opening the context menu of the message does
-                Some(message) => message.fetch_properties(),
-                None => log::warn!("auto-fetch-properties: message not loaded"),
-            }
-        });
-        self.add_auto_action("auto-submit-code", Some(glib::VariantTy::STRING), |app, p| {
-            if let Some(code) = p.and_then(|p| p.get::<String>()) {
-                app.auto_submit_code(code);
-            }
-        });
+        self.add_auto_action(
+            "auto-send-file",
+            Some(glib::VariantTy::new("(sb)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(String, bool)>()) {
+                Some((path, as_file)) => app.auto_send_file(path, as_file),
+                None => log::warn!("auto-send-file: missing parameters"),
+            },
+        );
+        self.add_auto_action(
+            "auto-submit-registration",
+            Some(glib::VariantTy::new("(ss)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(String, String)>()) {
+                Some((first, last)) => app.auto_submit_registration(first, last),
+                None => log::warn!("auto-submit-registration: missing parameters"),
+            },
+        );
+        self.add_auto_action(
+            "auto-submit-code",
+            Some(glib::VariantTy::STRING),
+            |app, p| {
+                if let Some(code) = p.and_then(|p| p.get::<String>()) {
+                    app.auto_submit_code(code);
+                }
+            },
+        );
     }
 
     fn add_auto_action(
@@ -261,9 +330,13 @@ impl Application {
         if let Some(chat) = history.and_then(|h| h.chat()) {
             out.push_str(&format!("open-chat\t{}\t{}\n", chat.id(), chat.title()));
             if let Some(model) = chat.history() {
+                out.push_str(&format!(
+                    "history\t{}\t{}\n",
+                    model.at_newest(),
+                    model.anchor()
+                ));
                 for i in 0..model.n_items() {
-                    let Some(item) = model.item(i).and_downcast::<model::ChatHistoryItem>()
-                    else {
+                    let Some(item) = model.item(i).and_downcast::<model::ChatHistoryItem>() else {
                         continue;
                     };
                     if let Some(message) = item.message() {
@@ -282,7 +355,11 @@ impl Application {
                                     tdlib::enums::ReactionType::Emoji(e) => e.emoji.clone(),
                                     _ => "?".to_owned(),
                                 };
-                                format!("{emoji}{}{}", r.total_count, if r.is_chosen { "*" } else { "" })
+                                format!(
+                                    "{emoji}{}{}",
+                                    r.total_count,
+                                    if r.is_chosen { "*" } else { "" }
+                                )
                             })
                             .collect();
                         out.push_str(&format!(
@@ -307,8 +384,15 @@ impl Application {
             .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
         {
             let mut pictures = 0;
+            let mut downloads = 0;
             let mut replies = vec![];
             walk(history.upcast_ref(), &mut |widget| {
+                if widget
+                    .downcast_ref::<ui::MediaPhotoTile>()
+                    .is_some_and(|tile| tile.offers_download())
+                {
+                    downloads += 1;
+                }
                 if let Some(picture) = widget.downcast_ref::<gtk::Picture>() {
                     if picture.paintable().is_some() {
                         pictures += 1;
@@ -327,6 +411,7 @@ impl Application {
                 }
             });
             out.push_str(&format!("pictures\t{pictures}\n"));
+            out.push_str(&format!("download-offers\t{downloads}\n"));
             if let Some(scrolled) = descendant::<gtk::ScrolledWindow>(history.upcast_ref()) {
                 let adj = scrolled.vadjustment();
                 out.push_str(&format!(
@@ -340,7 +425,108 @@ impl Application {
                 out.push_str(&format!("reply\t{reply}\n"));
             }
         }
+        if let Some(search) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::SidebarSearch>(w.upcast_ref()))
+        {
+            for name in search.result_names() {
+                out.push_str(&format!("search\t{name}\n"));
+            }
+        }
         write_artifact("state.txt", out.as_bytes());
+    }
+
+    /// Scrolls the chat history to `fraction` of its range: 0 is the
+    /// oldest loaded message, 1 the newest, as a user dragging it would.
+    fn auto_scroll(&self, fraction: f64) {
+        let Some(scrolled) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
+            .and_then(|history| descendant::<gtk::ScrolledWindow>(history.upcast_ref()))
+        else {
+            log::warn!("auto-scroll: no chat history");
+            return;
+        };
+        let adj = scrolled.vadjustment();
+        adj.set_value((adj.upper() - adj.page_size()) * fraction.clamp(0.0, 1.0));
+    }
+
+    /// Activates an action of the chat history, as its buttons do:
+    /// `scroll-down` (the message id is ignored), `jump-to-message` or
+    /// `reply`.
+    fn auto_history_action(&self, name: &str, message_id: i64) {
+        let Some(history) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
+        else {
+            log::warn!("auto-history-action: no chat history");
+            return;
+        };
+        let parameter =
+            matches!(name, "jump-to-message" | "reply").then(|| message_id.to_variant());
+        if let Err(e) = history.activate_action(&format!("chat-history.{name}"), parameter.as_ref())
+        {
+            log::warn!("auto-history-action: {e}");
+        }
+    }
+
+    /// Searches for `query` in the sidebar; the results are in state.txt.
+    fn auto_search(&self, query: &str) {
+        match self
+            .auto_window()
+            .and_then(|w| descendant::<ui::SidebarSearch>(w.upcast_ref()))
+        {
+            Some(search) => search.set_query(query),
+            None => log::warn!("auto-search: no search"),
+        }
+    }
+
+    /// Sends the file at `path` to the open chat as a photo, or as a file,
+    /// through the window that the attach button opens.
+    fn auto_send_file(&self, path: String, as_file: bool) {
+        let (Some(window), Some(chat)) = (self.auto_window(), self.open_chat()) else {
+            log::warn!("auto-send-file: no open chat");
+            return;
+        };
+        let send_window = ui::SendMediaWindow::new(window.upcast_ref(), &chat, path, 0);
+        utils::spawn(async move { send_window.send(as_file).await });
+    }
+
+    /// Registers the new account of the login with the given name.
+    fn auto_submit_registration(&self, first_name: String, last_name: String) {
+        let Some(registration) = self
+            .active_client()
+            .and_then(|client| client.state())
+            .and_downcast::<model::ClientStateAuth>()
+            .and_then(|auth| auth.state())
+            .and_downcast::<model::ClientStateAuthRegistration>()
+        else {
+            log::warn!("auto-submit-registration: no registration");
+            return;
+        };
+        utils::spawn(async move {
+            if let Err(e) = registration.send_registration(first_name, last_name).await {
+                log::warn!("auto-submit-registration failed: {e:?}");
+            }
+        });
+    }
+
+    /// Clicks the photos of the chat history that offer a download.
+    fn auto_download_media(&self) {
+        let Some(history) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
+        else {
+            log::warn!("auto-download-media: no chat history");
+            return;
+        };
+        walk(history.upcast_ref(), &mut |widget| {
+            if let Some(tile) = widget.downcast_ref::<ui::MediaPhotoTile>() {
+                if tile.offers_download() {
+                    tile.click_download();
+                }
+            }
+        });
     }
 
     /// Writes the main chat list (`<id>\t<title>\t<unread>`) to

@@ -1,0 +1,15 @@
+{
+  "auth": "ready",
+  "me": { "id": 137, "name": "Test User" },
+  "chats": [
+    {
+      "with": { "id": 1001, "name": "Alice Example" },
+      "messages": [{ "id": 1, "text": "Hi, this is Alice", "ago": 60 }]
+    },
+    {
+      "with": { "id": 1002, "name": "Bob Example" },
+      "messages": [{ "id": 1, "text": "Bob says hello", "ago": 120 }]
+    }
+  ],
+  "public": [{ "id": 2001, "name": "Alice News" }]
+}

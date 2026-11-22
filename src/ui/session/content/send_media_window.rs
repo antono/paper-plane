@@ -168,6 +168,11 @@ impl SendMediaWindow {
         emoji_chooser.as_ref().unwrap().popup();
     }
 
+    /// Sends the file as a photo, or as a file, as the send buttons do.
+    pub(crate) async fn send(&self, send_as_file: bool) {
+        self.send_message(send_as_file).await;
+    }
+
     async fn send_message(&self, send_as_file: bool) {
         use tdlib::enums::*;
         use tdlib::types::*;

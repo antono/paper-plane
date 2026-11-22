@@ -109,7 +109,7 @@ fn permissions() -> types::ChatPermissions {
     }
 }
 
-fn notification_settings() -> types::ChatNotificationSettings {
+pub(crate) fn notification_settings() -> types::ChatNotificationSettings {
     types::ChatNotificationSettings {
         use_default_mute_for: true,
         mute_for: 0,
@@ -195,6 +195,19 @@ pub(crate) fn forwarded_from(user_id: i64) -> Option<types::MessageForwardInfo> 
         source: None,
         public_service_announcement_type: String::new(),
     })
+}
+
+/// The id of Telegram's "Replies" service account and chat.
+pub(crate) const REPLIES: i64 = 1271266957;
+
+/// A reply in the Replies chat: a message of the Replies account forwarded
+/// from the user `author`.
+pub(crate) fn replies_reply(id: MessageId, author: i64) -> types::Message {
+    let mut reply = message(REPLIES, id, DAY, 0, text("a reply"));
+    reply.sender_id = enums::MessageSender::User(types::MessageSenderUser { user_id: REPLIES });
+    reply.is_outgoing = false;
+    reply.forward_info = forwarded_from(author);
+    reply
 }
 
 fn add_chat_of_type(

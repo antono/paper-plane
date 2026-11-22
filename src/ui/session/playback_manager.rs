@@ -253,7 +253,7 @@ pub(super) mod tests {
     use super::*;
 
     /// Writes a short silent PCM WAV file and returns its path.
-    fn silent_wav(name: &str) -> PathBuf {
+    pub(crate) fn silent_wav(name: &str) -> PathBuf {
         let rate: u32 = 8000;
         let samples = vec![0u8; rate as usize / 5]; // 0.2 s, 8 bit mono
         let mut wav = Vec::new();
