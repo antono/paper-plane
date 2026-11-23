@@ -185,6 +185,30 @@ pub(crate) fn add_secret_chat(
     )
 }
 
+/// Adds a basic group chat in which the user has the member `status`.
+pub(crate) fn add_basic_group_chat(
+    session: &model::ClientStateSession,
+    id: ChatId,
+    basic_group_id: i64,
+    status: enums::ChatMemberStatus,
+) -> model::Chat {
+    session.handle_update(enums::Update::BasicGroup(types::UpdateBasicGroup {
+        basic_group: types::BasicGroup {
+            id: basic_group_id,
+            member_count: 2,
+            status,
+            is_active: true,
+            upgraded_to_supergroup_id: 0,
+        },
+    }));
+    add_chat_of_type(
+        session,
+        id,
+        enums::ChatType::BasicGroup(types::ChatTypeBasicGroup { basic_group_id }),
+        "Group",
+    )
+}
+
 /// The forward info of a message originally sent by the user `user_id`.
 pub(crate) fn forwarded_from(user_id: i64) -> Option<types::MessageForwardInfo> {
     Some(types::MessageForwardInfo {

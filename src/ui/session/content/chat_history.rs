@@ -14,9 +14,14 @@ use gtk::glib;
 use gtk::CompositeTemplate;
 
 use crate::expressions;
+use crate::i18n::gettext_f;
+use crate::i18n::ngettext_f;
 use crate::model;
 use crate::ui;
 use crate::utils;
+
+use super::message_selection;
+use super::message_selection::MessageSelection;
 
 /// The number of messages requested when the viewport is first filled with
 /// messages. If it is not enough, smaller chunks are requested until it is.
@@ -44,6 +49,22 @@ mod imp {
         pub(super) viewed_message_ids_changed: Cell<bool>,
         pub(super) view_messages_scheduled: Cell<bool>,
         pub(super) is_secret_chat: Cell<bool>,
+        /// The selected messages. It lives as long as the widget, so that the
+        /// recycled rows of the list view always talk to the same object.
+        pub(super) selection: MessageSelection,
+        /// Whether the chat picker of the forwarding is open. Escape then
+        /// belongs to the dialog, not to the selection behind it.
+        pub(super) is_picking_chat: Cell<bool>,
+        #[template_child]
+        pub(super) header_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub(super) selection_title: TemplateChild<adw::WindowTitle>,
+        #[template_child]
+        pub(super) bottom_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub(super) reply_selected_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub(super) forward_selected_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub(super) window_title: TemplateChild<adw::WindowTitle>,
         #[template_child]
@@ -93,6 +114,41 @@ mod imp {
                 move |widget, _, variant| {
                     let message_id = variant.and_then(|v| v.get()).unwrap();
                     widget.jump_to_message(message_id);
+                },
+            );
+            klass.install_action(
+                "chat-history.toggle-selection",
+                Some(glib::VariantTy::INT64),
+                move |widget, _, variant| {
+                    let message_id = variant.and_then(|v| v.get()).unwrap();
+                    widget.toggle_selection(message_id);
+                },
+            );
+            klass.install_action(
+                "chat-history.cancel-selection",
+                None,
+                move |widget, _, _| {
+                    widget.imp().selection.clear();
+                },
+            );
+            klass.install_action("chat-history.reply-selected", None, move |widget, _, _| {
+                widget.reply_selected();
+            });
+            klass.install_action("chat-history.copy-selected", None, move |widget, _, _| {
+                widget.copy_selected();
+            });
+            klass.install_action_async(
+                "chat-history.forward-selected",
+                None,
+                |widget, _, _| async move {
+                    widget.forward_selected().await;
+                },
+            );
+            klass.install_action_async(
+                "chat-history.delete-selected",
+                None,
+                |widget, _, _| async move {
+                    widget.show_delete_selected_dialog().await;
                 },
             );
             klass.install_action_async(
@@ -157,6 +213,31 @@ mod imp {
             let obj = self.obj();
 
             obj.setup_expressions();
+
+            // Without a selection the actions are disabled, so that the
+            // Escape shortcut is not consumed and falls through.
+            for action in [
+                "chat-history.cancel-selection",
+                "chat-history.reply-selected",
+                "chat-history.copy-selected",
+                "chat-history.forward-selected",
+                "chat-history.delete-selected",
+            ] {
+                obj.action_set_enabled(action, false);
+            }
+            self.selection.connect_changed(clone!(
+                #[weak]
+                obj,
+                move |_| obj.update_selection_ui()
+            ));
+
+            let shortcut_controller = gtk::ShortcutController::new();
+            shortcut_controller.set_scope(gtk::ShortcutScope::Global);
+            shortcut_controller.add_shortcut(gtk::Shortcut::new(
+                gtk::ShortcutTrigger::parse_string("Escape"),
+                Some(gtk::NamedAction::new("chat-history.cancel-selection")),
+            ));
+            obj.add_controller(shortcut_controller);
 
             let adj = self.list_view.vadjustment().unwrap();
             adj.connect_value_changed(clone!(
@@ -296,6 +377,301 @@ impl ChatHistory {
         );
     }
 
+    pub(crate) fn selection(&self) -> &MessageSelection {
+        &self.imp().selection
+    }
+
+    /// Selects or deselects the message, a whole media album if it is one.
+    fn toggle_selection(&self, message_id: i64) {
+        let Some(message) = self.chat().and_then(|chat| chat.message(message_id)) else {
+            return;
+        };
+
+        let ids = match message.media_album() {
+            Some(album) if album.len() >= 2 => album.messages().iter().map(|m| m.id()).collect(),
+            _ => vec![message_id],
+        };
+        self.imp().selection.toggle(&ids);
+    }
+
+    /// Shows the selection header and action bar while messages are selected.
+    fn update_selection_ui(&self) {
+        let imp = self.imp();
+        let n = imp.selection.n_selected();
+        let active = imp.selection.active();
+
+        imp.header_stack
+            .set_visible_child_name(if active { "selection" } else { "normal" });
+        imp.bottom_stack
+            .set_visible_child_name(if active { "selection" } else { "composer" });
+        imp.selection_title.set_title(&ngettext_f(
+            "{n} selected",
+            "{n} selected",
+            n,
+            &[("n", &n.to_string())],
+        ));
+
+        // Replying is possible to one message, in a chat that can be written to.
+        let can_reply = n == 1
+            && imp.selection.messages().first().is_some_and(|message| {
+                super::message_row::can_send_messages_in_chat(&message.chat_())
+            });
+        imp.reply_selected_button.set_visible(n == 1);
+        self.action_set_enabled("chat-history.reply-selected", can_reply);
+
+        self.action_set_enabled(
+            "chat-history.cancel-selection",
+            active && !imp.is_picking_chat.get(),
+        );
+        self.action_set_enabled("chat-history.copy-selected", active);
+        self.action_set_enabled("chat-history.forward-selected", active);
+        self.action_set_enabled("chat-history.delete-selected", active);
+    }
+
+    fn reply_selected(&self) {
+        let ids = self.imp().selection.ids();
+        if let [id] = ids[..] {
+            self.activate_action("chat-history.reply", Some(&id.to_variant()))
+                .unwrap();
+            self.imp().selection.clear();
+        }
+    }
+
+    /// Puts the selected messages on the clipboard, Telegram-style, and leaves
+    /// the selection mode. Returns the copied text.
+    pub(crate) fn copy_selected(&self) -> String {
+        // The selected part of the text of a single message wins over the
+        // whole text
+        let selected_part = selected_text_in(self.upcast_ref());
+        let text = selected_part
+            .unwrap_or_else(|| message_selection::copy_text_of(&self.imp().selection.messages()));
+
+        if !text.is_empty() {
+            self.clipboard().set_text(&text);
+            if self.ancestor(adw::ToastOverlay::static_type()).is_some() {
+                utils::show_toast(self, gettext("Copied to clipboard"));
+            }
+        }
+        self.imp().selection.clear();
+
+        text
+    }
+
+    /// Asks for the chat to forward the selected messages to.
+    async fn forward_selected(&self) {
+        let imp = self.imp();
+        let messages = imp.selection.messages();
+        let Some(chat) = self.chat() else {
+            return;
+        };
+        if messages.is_empty() || imp.is_picking_chat.get() {
+            return;
+        }
+
+        // The action is not disabled while it awaits, so a second activation
+        // must find the guard set already. It also takes Escape and Cancel
+        // away, which would leave the mode behind a dialog.
+        imp.is_picking_chat.set(true);
+        self.update_selection_ui();
+
+        // The selection and the chat can change while TDLib is asked, so the
+        // picker and the forwarding use this snapshot only.
+        let ids: Vec<i64> = messages.iter().map(|m| m.id()).collect();
+
+        // Whether a message can be forwarded is only known after TDLib was
+        // asked, which is normally done lazily.
+        futures::future::join_all(messages.iter().map(|m| m.load_properties())).await;
+
+        self.offer_forwarding(chat, messages, ids);
+    }
+
+    /// Opens the chat picker if the selection is still what was asked about
+    /// and all of it can be forwarded. `is_picking_chat` is set by the caller
+    /// and reset here unless the picker opens.
+    fn offer_forwarding(&self, chat: model::Chat, messages: Vec<model::Message>, ids: Vec<i64>) {
+        let imp = self.imp();
+        let unchanged = self.chat().as_ref() == Some(&chat) && imp.selection.message_ids() == ids;
+        if !unchanged || !messages.iter().all(|m| m.can_be_forwarded()) {
+            imp.is_picking_chat.set(false);
+            self.update_selection_ui();
+            if unchanged && self.ancestor(adw::ToastOverlay::static_type()).is_some() {
+                utils::show_toast(self, gettext("Some of these messages can't be forwarded"));
+            }
+            return;
+        }
+
+        let dialog = ui::ChatPickerDialog::new(&chat.session_());
+        dialog.connect_chat_picked(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, target| {
+                let (chat, ids) = (chat.clone(), ids.clone());
+                utils::spawn(async move { obj.forward_to(&target, &chat, ids).await });
+            }
+        ));
+        dialog.connect_closed(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_| {
+                obj.imp().is_picking_chat.set(false);
+                obj.update_selection_ui();
+            }
+        ));
+
+        dialog.present(Some(self));
+    }
+
+    /// Forwards the selected messages to the chat and leaves the selection
+    /// mode. The selection stays if TDLib refuses.
+    pub(crate) async fn forward_selected_to(&self, target: &model::Chat) {
+        let Some(chat) = self.chat() else {
+            return;
+        };
+        let ids = self.imp().selection.message_ids();
+        self.forward_to(target, &chat, ids).await;
+    }
+
+    async fn forward_to(&self, target: &model::Chat, chat: &model::Chat, ids: Vec<i64>) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let toast = match target.forward_messages(chat, ids.clone()).await {
+            Ok(()) => {
+                // Another chat has its own selection by now
+                if self.chat().as_ref() == Some(chat) {
+                    self.imp().selection.clear();
+                }
+                gettext_f("Forwarded to {chat}", &[("chat", &target.title())])
+            }
+            Err(e) => {
+                log::warn!("Error forwarding messages: {e:?}");
+                gettext("Could not forward the messages")
+            }
+        };
+        if self.ancestor(adw::ToastOverlay::static_type()).is_some() {
+            utils::show_toast(self, toast);
+        }
+    }
+
+    /// Whether all selected messages can be deleted for the user only, and
+    /// whether they can be deleted for everyone.
+    pub(crate) async fn delete_options(&self) -> (bool, bool) {
+        Self::options_for(&self.imp().selection.messages()).await
+    }
+
+    async fn options_for(messages: &[model::Message]) -> (bool, bool) {
+        // Whether a message can be deleted for everyone is only known after
+        // TDLib was asked, which is normally done lazily.
+        futures::future::join_all(messages.iter().map(|m| m.load_properties())).await;
+
+        (
+            messages.iter().all(|m| m.can_be_deleted_only_for_self()),
+            messages.iter().all(|m| m.can_be_deleted_for_all_users()),
+        )
+    }
+
+    /// The title of the selection header, for the automation bridge.
+    pub(crate) fn selection_title_text(&self) -> String {
+        self.imp().selection_title.title().to_string()
+    }
+
+    /// The name of the page shown instead of the message list's bottom bar.
+    pub(crate) fn bottom_page(&self) -> Option<String> {
+        self.imp()
+            .bottom_stack
+            .visible_child_name()
+            .map(|name| name.to_string())
+    }
+
+    async fn show_delete_selected_dialog(&self) {
+        if self.imp().selection.n_selected() == 0 {
+            return;
+        }
+        // The selection can change while the properties load or the dialog is
+        // open, so the dialog describes and deletes this snapshot only.
+        let messages = self.imp().selection.messages();
+        let ids: Vec<i64> = messages.iter().map(|m| m.id()).collect();
+        let n = ids.len() as u32;
+        let (for_me, for_all) = Self::options_for(&messages).await;
+
+        let Some(window) = self.parent_window() else {
+            return;
+        };
+        if !for_me && !for_all {
+            if self.ancestor(adw::ToastOverlay::static_type()).is_some() {
+                utils::show_toast(self, gettext("These messages can't be deleted"));
+            }
+            return;
+        }
+
+        let dialog = adw::AlertDialog::builder()
+            .heading(ngettext_f(
+                "Delete {n} message?",
+                "Delete {n} messages?",
+                n,
+                &[("n", &n.to_string())],
+            ))
+            .build();
+        dialog.add_response("cancel", &gettext("_Cancel"));
+        for response in delete_responses(for_me, for_all) {
+            let label = match response {
+                "me" => gettext("Delete for _Me"),
+                _ => gettext("Delete for Ever_yone"),
+            };
+            dialog.add_response(response, &label);
+            dialog.set_response_appearance(response, adw::ResponseAppearance::Destructive);
+        }
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let response = dialog.choose_future(&window).await;
+        self.delete_after_response(&response, &ids);
+    }
+
+    /// Deletes the snapshot of the selection that the dialog asked about, as
+    /// the response says.
+    fn delete_after_response(&self, response: &str, ids: &[i64]) {
+        let Some(revoke) = revoke_of_response(response) else {
+            return;
+        };
+        if self.imp().selection.message_ids() != ids {
+            // The options above may not hold for the current selection
+            return;
+        }
+        self.delete_selected(revoke);
+    }
+
+    /// Deletes the selected messages with one request and leaves the
+    /// selection mode.
+    pub(crate) fn delete_selected(&self, revoke: bool) {
+        let selection = &self.imp().selection;
+        // Ids of messages that are gone are not worth a request, and the
+        // options that were checked covered only the messages that are known.
+        let ids = selection.message_ids();
+        selection.clear();
+
+        let Some(chat) = self.chat() else {
+            return;
+        };
+        if ids.is_empty() {
+            return;
+        }
+
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                if let Err(e) = chat.delete_messages(ids, revoke).await {
+                    log::warn!("Error deleting messages (revoke = {revoke}): {e:?}");
+                    if obj.ancestor(adw::ToastOverlay::static_type()).is_some() {
+                        utils::show_toast(&obj, gettext("Couldn't delete the messages"));
+                    }
+                }
+            }
+        ));
+    }
+
     fn open_info_dialog(&self) {
         if let Some(chat) = self.chat() {
             ui::ChatInfoWindow::new(&self.parent_window(), &chat).present();
@@ -413,6 +789,9 @@ impl ChatHistory {
         }
 
         let imp = self.imp();
+
+        // A selection belongs to one chat.
+        imp.selection.set_chat(chat);
 
         if let Some(chat) = old_chat {
             chat.disconnect(imp.chat_handler.replace(None).unwrap());
@@ -871,6 +1250,29 @@ impl ChatHistory {
     }
 }
 
+/// The responses of the delete dialog besides Cancel, for deleting only for
+/// the user and for everyone, as far as all selected messages allow it.
+fn delete_responses(for_me: bool, for_all: bool) -> Vec<&'static str> {
+    let mut responses = vec![];
+    if for_me {
+        responses.push("me");
+    }
+    if for_all {
+        responses.push("everyone");
+    }
+    responses
+}
+
+/// Whether a response of the delete dialog revokes the messages, `None` for
+/// the responses that delete nothing.
+fn revoke_of_response(response: &str) -> Option<bool> {
+    match response {
+        "me" => Some(false),
+        "everyone" => Some(true),
+        _ => None,
+    }
+}
+
 fn perform_chat_action<F, Fut>(chat: &model::Chat, op: F)
 where
     F: Fn(i64, i32) -> Fut + 'static,
@@ -885,10 +1287,31 @@ where
     ));
 }
 
+/// The text selected in the text view of a message. Only the label of the
+/// one selected row (or album caption) has a text view, so the row decides,
+/// not the number of selected messages (an album selects several).
+fn selected_text_in(widget: &gtk::Widget) -> Option<String> {
+    if let Some(label) = widget.downcast_ref::<ui::MessageLabel>() {
+        return label.text_view().and_then(|_| label.selected_text());
+    }
+
+    let mut child = widget.first_child();
+    while let Some(child_) = child {
+        if let Some(text) = selected_text_in(&child_) {
+            return Some(text);
+        }
+        child = child_.next_sibling();
+    }
+
+    None
+}
+
 /// Checks of the secret chat title (#625) that need GTK, see `ui::tests`.
 #[cfg(test)]
 pub(crate) fn gtk_check() {
     use crate::model::test_support::*;
+
+    selection_gtk_check();
 
     eprintln!("secret chat style in the chat history");
 
@@ -918,7 +1341,10 @@ pub(crate) fn gtk_check() {
         ));
         history.set_chat(Some(&chat));
         let model = || history.imp().model.borrow().clone().unwrap();
-        assert!(!model().at_newest(), "the chat opens at its unread messages");
+        assert!(
+            !model().at_newest(),
+            "the chat opens at its unread messages"
+        );
         let mut sending = message(43, 1 << 40, DAY, 0, text("sent from here"));
         sending.sending_state = Some(tdlib::enums::MessageSendingState::Pending(
             tdlib::types::MessageSendingStatePending { sending_id: 0 },
@@ -935,4 +1361,486 @@ pub(crate) fn gtk_check() {
         history.imp().viewed_message_ids_changed.set(true);
         history.view_messages();
     });
+}
+
+/// Whether the menu model has an item that activates the action.
+#[cfg(test)]
+fn menu_has_action(menu: &gio::MenuModel, action: &str) -> bool {
+    (0..menu.n_items()).any(|i| {
+        let item_action = menu
+            .item_attribute_value(i, "action", Some(glib::VariantTy::STRING))
+            .and_then(|v| v.get::<String>());
+        item_action.as_deref() == Some(action)
+            || [gio::MENU_LINK_SECTION, gio::MENU_LINK_SUBMENU]
+                .iter()
+                .filter_map(|link| menu.item_link(i, link))
+                .any(|linked| menu_has_action(&linked, action))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "For everyone" is offered only if every message allows it.
+    #[test]
+    fn delete_dialog_offers_what_all_messages_allow() {
+        assert_eq!(delete_responses(true, false), ["me"]);
+        assert_eq!(delete_responses(true, true), ["me", "everyone"]);
+        assert_eq!(delete_responses(false, true), ["everyone"]);
+        assert!(delete_responses(false, false).is_empty());
+    }
+
+    #[test]
+    fn delete_responses_revoke_only_for_everyone() {
+        assert_eq!(revoke_of_response("me"), Some(false));
+        assert_eq!(revoke_of_response("everyone"), Some(true));
+        assert_eq!(revoke_of_response("cancel"), None);
+        assert_eq!(revoke_of_response(""), None);
+    }
+}
+
+/// Checks of the selection mode (header, action bar, albums, copy) that need
+/// GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn selection_gtk_check() {
+    use crate::model::test_support::*;
+
+    selection_actions_gtk_check();
+
+    eprintln!("selection mode: forward is enabled only while selecting");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+        new_message(&session, message(42, 1, DAY, 0, text("one")));
+        // The sensitivity of an action button is only tracked in a window.
+        let window = gtk::Window::new();
+        window.set_child(Some(&history));
+
+        let forward = &history.imp().forward_selected_button;
+        assert!(!forward.is_sensitive());
+        history
+            .activate_action("chat-history.toggle-selection", Some(&1i64.to_variant()))
+            .unwrap();
+        assert!(forward.is_sensitive());
+        history.selection().clear();
+        assert!(!forward.is_sensitive());
+
+        window.set_child(gtk::Widget::NONE);
+    });
+
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+        for id in 1..=3 {
+            new_message(
+                &session,
+                message(42, id, DAY + id as i32 * 60, 0, text(&format!("text {id}"))),
+            );
+        }
+        let imp = history.imp();
+        let toggle = |id: i64| {
+            history
+                .activate_action("chat-history.toggle-selection", Some(&id.to_variant()))
+                .unwrap()
+        };
+        let stack_page = |stack: &gtk::Stack| stack.visible_child_name().unwrap().to_string();
+
+        eprintln!("selection mode: header, action bar and reply visibility");
+        assert_eq!(stack_page(&imp.header_stack), "normal");
+        assert_eq!(stack_page(&imp.bottom_stack), "composer");
+        toggle(1);
+        assert_eq!(stack_page(&imp.header_stack), "selection");
+        assert_eq!(imp.selection_title.title(), "1 selected");
+        assert_eq!(stack_page(&imp.bottom_stack), "selection");
+        assert!(imp.reply_selected_button.is_visible());
+        toggle(2);
+        assert_eq!(imp.selection_title.title(), "2 selected");
+        assert!(!imp.reply_selected_button.is_visible());
+        history
+            .activate_action("chat-history.cancel-selection", None)
+            .unwrap();
+        assert!(!history.selection().active());
+        assert_eq!(stack_page(&imp.header_stack), "normal");
+        assert_eq!(stack_page(&imp.bottom_stack), "composer");
+
+        // Deselecting the last selected message leaves the mode.
+        toggle(3);
+        assert!(history.selection().active());
+        toggle(3);
+        assert!(!history.selection().active());
+        assert_eq!(stack_page(&imp.bottom_stack), "composer");
+
+        eprintln!("selection mode: copy");
+        toggle(1);
+        toggle(3);
+        let copied = history.copy_selected();
+        let lines: Vec<_> = copied.lines().collect();
+        assert_eq!(lines.len(), 2, "{copied:?}");
+        for (line, id) in lines.iter().zip([1, 3]) {
+            let b = line.as_bytes();
+            assert!(
+                b[0] == b'[' && b[3] == b':' && b[6] == b']' && b[7] == b' ',
+                "[HH:MM] prefix: {copied:?}"
+            );
+            assert!(line.ends_with(&format!(": text {id}")), "{copied:?}");
+        }
+        assert!(!history.selection().active(), "copying leaves the mode");
+        toggle(2);
+        assert_eq!(history.copy_selected(), "text 2");
+
+        eprintln!("selection mode: album rows select all members");
+        for id in 10..=11 {
+            new_message(&session, message(42, id, DAY + 600, 77, photo("")));
+        }
+        toggle(10);
+        assert_eq!(history.selection().ids(), [10, 11]);
+        toggle(10);
+        assert!(!history.selection().active());
+
+        eprintln!("selection mode: the Select item of the message menu");
+        assert!(menu_has_action(
+            history.message_menu().menu_model().as_ref().unwrap(),
+            "message-row.select"
+        ));
+        let row = ui::MessageRow::new(chat.message(1).unwrap().upcast_ref());
+        row.set_parent(&history);
+        row.activate_action("message-row.select", None).unwrap();
+        assert_eq!(history.selection().ids(), [1]);
+        row.activate_action("message-row.select", None).unwrap();
+        assert!(!history.selection().active());
+        row.unparent();
+
+        // The real wiring of a row of the list view: `set_item` and the
+        // `changed` connection made while the row is mapped.
+        eprintln!("selection mode: mapped rows follow the selection and recycling");
+        let window = gtk::Window::new();
+        window.set_child(Some(&history));
+        window.present();
+        let context = glib::MainContext::default();
+        for _ in 0..200 {
+            if history.is_mapped() {
+                break;
+            }
+            context.iteration(false);
+        }
+        assert!(history.is_mapped(), "the history is shown");
+
+        let item = |id: i64| {
+            model::ChatHistoryItem::for_message(chat.message(id).unwrap()).upcast::<glib::Object>()
+        };
+        let history_row = ui::ChatHistoryRow::new();
+        history_row.set_parent(&history);
+        history_row.set_item(Some(item(1)));
+        assert!(history_row.is_mapped());
+        let message_row = history_row
+            .child()
+            .and_downcast::<ui::MessageRow>()
+            .unwrap();
+        let checked = || message_row.has_css_class("selected-message");
+        let check_shown = || message_row.first_child().is_some_and(|c| c.is_visible());
+
+        assert!(!check_shown() && !checked());
+        // Selecting reaches the mapped row through its `changed` connection.
+        toggle(1);
+        assert!(check_shown() && checked(), "selected row is checked");
+        // The list view recycles the row for another message.
+        history_row.set_item(Some(item(2)));
+        assert!(check_shown() && !checked(), "recycled row is unchecked");
+        history_row.set_item(Some(item(1)));
+        assert!(checked(), "recycled back to the selected message");
+        toggle(1);
+        assert!(!check_shown() && !checked(), "leaving the mode clears it");
+
+        eprintln!("selection mode: only the single selected message gets a text view");
+        let second_row = ui::ChatHistoryRow::new();
+        second_row.set_parent(&history);
+        second_row.set_item(Some(item(2)));
+        let message_row_2 = second_row.child().and_downcast::<ui::MessageRow>().unwrap();
+        let has_view = |row: &ui::MessageRow| row.active_text_view().is_some();
+        assert!(!has_view(&message_row) && !has_view(&message_row_2));
+        toggle(1);
+        assert!(has_view(&message_row) && !has_view(&message_row_2));
+
+        // Copy takes the selected part of the text, if there is one
+        let buffer = message_row.active_text_view().unwrap().buffer();
+        buffer.select_range(&buffer.iter_at_offset(0), &buffer.iter_at_offset(4));
+        assert_eq!(history.copy_selected(), "text");
+        assert!(!has_view(&message_row), "copying leaves the mode");
+
+        toggle(1);
+        assert!(has_view(&message_row));
+        assert_eq!(history.copy_selected(), "text 1", "no part selected");
+
+        toggle(1);
+        toggle(2);
+        assert!(!has_view(&message_row) && !has_view(&message_row_2));
+        toggle(1);
+        assert!(!has_view(&message_row) && has_view(&message_row_2));
+        history
+            .activate_action("chat-history.cancel-selection", None)
+            .unwrap();
+        assert!(!has_view(&message_row) && !has_view(&message_row_2));
+
+        second_row.unparent();
+        history_row.unparent();
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    });
+}
+
+/// Escape, Reply, Forward and the delete response of the selection mode.
+#[cfg(test)]
+fn selection_actions_gtk_check() {
+    use crate::model::test_support::*;
+
+    let wait_until = |condition: &dyn Fn() -> bool| {
+        let context = glib::MainContext::default();
+        for _ in 0..200 {
+            if condition() {
+                return;
+            }
+            context.iteration(false);
+        }
+        panic!("timed out");
+    };
+
+    eprintln!("selection mode: Escape leaves it, and only while it is on");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+        new_message(&session, message(42, 1, DAY, 0, text("one")));
+
+        let escape =
+            gtk::KeyvalTrigger::new(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty());
+        let bound_to_escape = history
+            .observe_controllers()
+            .iter::<glib::Object>()
+            .filter_map(|controller| controller.ok()?.downcast::<gtk::ShortcutController>().ok())
+            .flat_map(|controller| {
+                (0..controller.n_items())
+                    .filter_map(|i| controller.item(i)?.downcast::<gtk::Shortcut>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .find(|shortcut| shortcut.trigger().is_some_and(|t| t.equal(&escape)))
+            .expect("a shortcut for Escape");
+        assert_eq!(
+            bound_to_escape
+                .action()
+                .and_downcast::<gtk::NamedAction>()
+                .unwrap()
+                .action_name(),
+            "chat-history.cancel-selection"
+        );
+
+        // A disabled action does not consume Escape, which falls through to
+        // what is below (closing a dialog, the media viewer, ...). The
+        // sensitivity of a button tracks the action, in a window.
+        let window = gtk::Window::new();
+        window.set_child(Some(&history));
+        let cancel_enabled =
+            || action_enabled(history.upcast_ref(), "chat-history.cancel-selection");
+        assert!(!cancel_enabled(), "disabled without a selection");
+        history
+            .activate_action("chat-history.toggle-selection", Some(&1i64.to_variant()))
+            .unwrap();
+        assert!(cancel_enabled());
+        history.imp().is_picking_chat.set(true);
+        history.update_selection_ui();
+        assert!(!cancel_enabled(), "disabled behind the chat picker");
+        history.imp().is_picking_chat.set(false);
+        history.update_selection_ui();
+        assert!(cancel_enabled());
+        history
+            .activate_action("chat-history.cancel-selection", None)
+            .unwrap();
+        assert!(!history.selection().active());
+        window.set_child(gtk::Widget::NONE);
+    });
+
+    eprintln!("selection mode: Reply needs a chat that can be written to");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let private = add_private_chat(&session, 42, 42, "Alice");
+        let left = add_basic_group_chat(&session, 50, 5, tdlib::enums::ChatMemberStatus::Left);
+        let history = ChatHistory::new();
+        history.set_chat(Some(&left));
+        new_message(&session, message(50, 1, DAY, 0, text("in a group")));
+        let toggle = |id: i64| {
+            history
+                .activate_action("chat-history.toggle-selection", Some(&id.to_variant()))
+                .unwrap()
+        };
+        let window = gtk::Window::new();
+        window.set_child(Some(&history));
+        let reply = &history.imp().reply_selected_button;
+        // The window is not shown, so only the own flag tells.
+        let visible = || reply.property::<bool>("visible");
+        toggle(1);
+        assert!(visible());
+        assert!(
+            !reply.is_sensitive(),
+            "can't reply in a group the user left"
+        );
+
+        history.set_chat(Some(&private));
+        new_message(&session, message(42, 2, DAY, 0, text("in a chat")));
+        toggle(2);
+        assert!(visible());
+        assert!(reply.is_sensitive());
+        window.set_child(gtk::Widget::NONE);
+    });
+
+    eprintln!("selection mode: Forward refuses, guards and cancels");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+        for id in 1..=2 {
+            new_message(&session, message(42, id, DAY + id as i32, 0, text("text")));
+        }
+        // The picker is a dialog of a window.
+        let window = adw::Window::new();
+        window.set_content(Some(&history));
+        window.present();
+        wait_until(&|| history.is_mapped());
+
+        for id in 1..=2i64 {
+            history
+                .activate_action("chat-history.toggle-selection", Some(&id.to_variant()))
+                .unwrap();
+        }
+        let cancel_enabled =
+            || action_enabled(history.upcast_ref(), "chat-history.cancel-selection");
+
+        // The properties of the test session never load (the client does not
+        // answer), they are set by hand.
+        let messages = history.selection().messages();
+        let ids = history.selection().message_ids();
+        let offer = || {
+            // What `forward_selected` does before it asks TDLib
+            history.imp().is_picking_chat.set(true);
+            history.update_selection_ui();
+            history.offer_forwarding(chat.clone(), messages.clone(), ids.clone());
+        };
+        messages[0].set_can_be_forwarded(true);
+        messages[1].set_can_be_forwarded(false);
+        offer();
+        assert!(
+            !history.imp().is_picking_chat.get(),
+            "a message that can't be forwarded refuses the picker"
+        );
+        assert_eq!(window.dialogs().n_items(), 0);
+        assert_eq!(history.selection().ids(), [1, 2], "the selection stays");
+        assert!(cancel_enabled());
+
+        messages[1].set_can_be_forwarded(true);
+        offer();
+        assert!(history.imp().is_picking_chat.get());
+        assert_eq!(window.dialogs().n_items(), 1);
+        assert!(!cancel_enabled(), "Escape belongs to the picker");
+
+        let dialog = window.visible_dialog().unwrap();
+        dialog.force_close();
+        wait_until(&|| !history.imp().is_picking_chat.get());
+        assert!(history.selection().active(), "closing the picker keeps it");
+        assert!(cancel_enabled());
+
+        // Activating Forward again while TDLib is still asked about the
+        // properties (here: forever) must not queue a second picker, and
+        // must not give Escape back.
+        let pending = || {
+            utils::spawn(clone!(
+                #[weak]
+                history,
+                async move { history.forward_selected().await }
+            ))
+        };
+        pending();
+        // The spawned future runs on the context that `isolated` pushed.
+        let context = glib::MainContext::ref_thread_default();
+        for _ in 0..50 {
+            context.iteration(false);
+        }
+        assert!(history.imp().is_picking_chat.get(), "set before the await");
+        assert!(!cancel_enabled());
+        pending();
+        for _ in 0..50 {
+            context.iteration(false);
+        }
+        assert!(!cancel_enabled());
+        assert_eq!(window.dialogs().n_items(), 0);
+
+        window.set_content(gtk::Widget::NONE);
+        window.destroy();
+    });
+
+    eprintln!("selection mode: delete follows the choice for the same selection");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+        for id in 1..=2 {
+            new_message(&session, message(42, id, DAY + id as i32, 0, text("text")));
+        }
+        let toggle = |id: i64| {
+            history
+                .activate_action("chat-history.toggle-selection", Some(&id.to_variant()))
+                .unwrap()
+        };
+        toggle(1);
+        let asked_about = history.selection().message_ids();
+        toggle(2);
+
+        history.delete_after_response("me", &asked_about);
+        assert_eq!(
+            history.selection().ids(),
+            [1, 2],
+            "the answer is about another selection"
+        );
+        history.delete_after_response("cancel", &[1, 2]);
+        assert_eq!(history.selection().ids(), [1, 2], "cancelled");
+        history.delete_after_response("everyone", &[1, 2]);
+        assert!(!history.selection().active(), "deleted, mode left");
+    });
+}
+
+/// Whether the button of the action is sensitive, which follows the state of
+/// the action while the widget is in a window.
+#[cfg(test)]
+fn action_enabled(widget: &gtk::Widget, action: &str) -> bool {
+    fn find(widget: &gtk::Widget, action: &str) -> Option<gtk::Widget> {
+        if widget
+            .dynamic_cast_ref::<gtk::Actionable>()
+            .and_then(|a| a.action_name())
+            .is_some_and(|name| name == action)
+        {
+            return Some(widget.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(child_) = child {
+            if let Some(found) = find(&child_, action) {
+                return Some(found);
+            }
+            child = child_.next_sibling();
+        }
+        None
+    }
+    find(widget, action)
+        .unwrap_or_else(|| panic!("a button for {action}"))
+        .is_sensitive()
 }

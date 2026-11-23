@@ -92,7 +92,7 @@ mod imp {
     #[gtk::template_callbacks]
     impl MessageLocation {
         #[template_callback]
-        fn on_map_gesture_click_pressed(&self) {
+        fn on_map_gesture_click_released(&self) {
             let obj = &*self.obj();
 
             let map_window =

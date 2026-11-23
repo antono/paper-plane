@@ -31,6 +31,9 @@ pub struct Scenario {
     /// threads, the process hangs at a normal exit: only `_exit` ends it.
     #[serde(default)]
     pub hang_at_exit: bool,
+    /// Ids of messages that can be deleted for the user only.
+    #[serde(default)]
+    pub undeletable_for_all: Vec<i64>,
     /// The date of the newest message; the others are older.
     #[serde(default = "default_now")]
     pub now: i32,
@@ -318,7 +321,10 @@ pub fn text_message(
 }
 
 /// What the user may do with a message of a private chat.
-pub fn message_properties(message: &types::Message) -> types::MessageProperties {
+pub fn message_properties(
+    message: &types::Message,
+    undeletable_for_all: &[i64],
+) -> types::MessageProperties {
     let own = message.is_outgoing;
     types::MessageProperties {
         can_add_offer: false,
@@ -328,7 +334,7 @@ pub fn message_properties(message: &types::Message) -> types::MessageProperties 
         can_be_copied_to_secret_chat: true,
         can_be_declined: false,
         can_be_deleted_only_for_self: true,
-        can_be_deleted_for_all_users: true,
+        can_be_deleted_for_all_users: !undeletable_for_all.contains(&message.id),
         can_be_edited: own,
         can_be_forwarded: true,
         can_be_paid: false,

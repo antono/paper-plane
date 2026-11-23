@@ -5,34 +5,63 @@
     <child>
       <object class="AdwToolbarView">
         <child type="top">
-          <object class="GtkOverlay">
+          <object class="GtkStack" id="header_stack">
+            <property name="transition-type">crossfade</property>
             <child>
-              <object class="AdwHeaderBar">
-                <child type="title">
-                  <object class="GtkBox">
+              <object class="GtkStackPage">
+                <property name="name">normal</property>
+                <property name="child">
+                  <object class="GtkOverlay">
                     <child>
-                      <object class="GtkImage">
-                        <property name="visible" bind-source="PaplChatHistory"
-                          bind-property="is-secret-chat" bind-flags="sync-create" />
-                        <property name="icon-name">padlock2-symbolic</property>
+                      <object class="AdwHeaderBar">
+                        <child type="title">
+                          <object class="GtkBox">
+                            <child>
+                              <object class="GtkImage">
+                                <property name="visible" bind-source="PaplChatHistory"
+                                  bind-property="is-secret-chat" bind-flags="sync-create" />
+                                <property name="icon-name">padlock2-symbolic</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwWindowTitle" id="window_title"/>
+                            </child>
+                          </object>
+                        </child>
+                        <child type="end">
+                          <object class="GtkMenuButton">
+                            <property name="icon-name">view-more-symbolic</property>
+                            <property name="menu-model">chat-menu-model</property>
+                          </object>
+                        </child>
                       </object>
                     </child>
-                    <child>
-                      <object class="AdwWindowTitle" id="window_title"/>
+                    <child type="overlay">
+                      <object class="PaplSnow" id="PaplSnow">
+                        <property name="sensitive">False</property>
+                      </object>
                     </child>
                   </object>
-                </child>
-                <child type="end">
-                  <object class="GtkMenuButton">
-                    <property name="icon-name">view-more-symbolic</property>
-                    <property name="menu-model">chat-menu-model</property>
-                  </object>
-                </child>
+                </property>
               </object>
             </child>
-            <child type="overlay">
-              <object class="PaplSnow" id="PaplSnow">
-                <property name="sensitive">False</property>
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">selection</property>
+                <property name="child">
+                  <object class="AdwHeaderBar">
+                    <property name="show-back-button">False</property>
+                    <child type="start">
+                      <object class="GtkButton">
+                        <property name="label" translatable="yes">Cancel</property>
+                        <property name="action-name">chat-history.cancel-selection</property>
+                      </object>
+                    </child>
+                    <property name="title-widget">
+                      <object class="AdwWindowTitle" id="selection_title"/>
+                    </property>
+                  </object>
+                </property>
               </object>
             </child>
           </object>
@@ -135,16 +164,162 @@
           </object>
         </property>
         <child type="bottom">
-          <object class="AdwClamp">
-            <property name="maximum-size">800</property>
-            <property name="tightening-threshold">600</property>
-            <property name="child">
-              <object class="PaplChatActionBar" id="chat_action_bar">
-                <binding name="chat">
-                  <lookup name="chat">PaplChatHistory</lookup>
-                </binding>
+          <object class="GtkStack" id="bottom_stack">
+            <property name="vhomogeneous">False</property>
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">composer</property>
+                <property name="child">
+                  <object class="AdwClamp">
+                    <property name="maximum-size">800</property>
+                    <property name="tightening-threshold">600</property>
+                    <property name="child">
+                      <object class="PaplChatActionBar" id="chat_action_bar">
+                        <binding name="chat">
+                          <lookup name="chat">PaplChatHistory</lookup>
+                        </binding>
+                      </object>
+                    </property>
+                  </object>
+                </property>
               </object>
-            </property>
+            </child>
+            <child>
+              <object class="GtkStackPage">
+                <property name="name">selection</property>
+                <property name="child">
+                  <object class="AdwClamp">
+                    <property name="maximum-size">800</property>
+                    <property name="tightening-threshold">600</property>
+                    <property name="child">
+                      <object class="GtkBox">
+                        <property name="homogeneous">True</property>
+                        <property name="spacing">6</property>
+                        <property name="margin-start">6</property>
+                        <property name="margin-end">6</property>
+                        <property name="margin-top">6</property>
+                        <property name="margin-bottom">6</property>
+                        <style>
+                          <class name="toolbar"/>
+                        </style>
+                        <child>
+                          <object class="GtkButton" id="reply_selected_button">
+                            <property name="action-name">chat-history.reply-selected</property>
+                            <property name="child">
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">mail-reply-sender-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Reply</property>
+                                    <property name="ellipsize">end</property>
+                                    <style>
+                                      <class name="caption"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton">
+                            <property name="action-name">chat-history.copy-selected</property>
+                            <property name="child">
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">edit-copy-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Copy</property>
+                                    <property name="ellipsize">end</property>
+                                    <style>
+                                      <class name="caption"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="forward_selected_button">
+                            <property name="action-name">chat-history.forward-selected</property>
+                            <property name="child">
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">mail-forward-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Forward</property>
+                                    <property name="ellipsize">end</property>
+                                    <style>
+                                      <class name="caption"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton">
+                            <property name="action-name">chat-history.delete-selected</property>
+                            <property name="child">
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">user-trash-symbolic</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Delete</property>
+                                    <property name="ellipsize">end</property>
+                                    <style>
+                                      <class name="caption"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+              </object>
+            </child>
           </object>
         </child>
       </object>

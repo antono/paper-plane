@@ -11,7 +11,7 @@ template $PaplMessageLocation : $PaplMessageBase {
 
       $PaplMap map {
         GestureClick {
-          pressed => $on_map_gesture_click_pressed() swapped;
+          released => $on_map_gesture_click_released() swapped;
         }
 
         cursor: Gdk.Cursor {

@@ -5,4 +5,14 @@ template $PaplMessageRow {
     button: 1;
     released => $on_released() swapped;
   }
+
+  // Selects the row in the selection mode (or with Ctrl). It runs in the
+  // capture phase to claim the click before links and media see it.
+  GestureClick selection_click {
+    button: 1;
+    propagation-phase: capture;
+    pressed => $on_selection_pressed() swapped;
+    released => $on_selection_released() swapped;
+    cancel => $on_selection_cancelled() swapped;
+  }
 }

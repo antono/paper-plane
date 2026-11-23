@@ -68,6 +68,8 @@ mod imp {
         pub(super) can_be_deleted_only_for_self: Cell<bool>,
         #[property(get, set)]
         pub(super) can_be_deleted_for_all_users: Cell<bool>,
+        #[property(get, set)]
+        pub(super) can_be_forwarded: Cell<bool>,
         #[property(get, set, construct_only)]
         pub(super) sending_state: OnceCell<Option<model::BoxedMessageSendingState>>,
         #[property(get, set, construct_only)]
@@ -204,25 +206,29 @@ impl Message {
             #[weak(rename_to = obj)]
             self,
             async move {
-                let chat = obj.chat_();
-                let Ok(client_id) = chat.client_id() else {
-                    return;
-                };
-                match tdlib::functions::get_message_properties(chat.id(), obj.id(), client_id).await
-                {
-                    Ok(tdlib::enums::MessageProperties::MessageProperties(properties)) => {
-                        obj.set_can_be_edited(properties.can_be_edited);
-                        obj.set_can_be_deleted_only_for_self(
-                            properties.can_be_deleted_only_for_self,
-                        );
-                        obj.set_can_be_deleted_for_all_users(
-                            properties.can_be_deleted_for_all_users,
-                        );
-                    }
-                    Err(e) => log::warn!("Error getting message properties: {e:?}"),
-                }
+                obj.load_properties().await;
             }
         ));
+    }
+
+    /// Requests the message properties from TDLib and stores them. Unlike
+    /// `fetch_properties`, it always asks, so that a caller which needs the
+    /// answer (e.g. deleting a selection) can wait for it.
+    pub(crate) async fn load_properties(&self) {
+        let chat = self.chat_();
+        let Ok(client_id) = chat.client_id() else {
+            return;
+        };
+        match tdlib::functions::get_message_properties(chat.id(), self.id(), client_id).await {
+            Ok(tdlib::enums::MessageProperties::MessageProperties(properties)) => {
+                self.set_can_be_edited(properties.can_be_edited);
+                self.set_can_be_deleted_only_for_self(properties.can_be_deleted_only_for_self);
+                self.set_can_be_deleted_for_all_users(properties.can_be_deleted_for_all_users);
+                self.set_can_be_forwarded(properties.can_be_forwarded);
+                self.imp().properties_fetched.set(true);
+            }
+            Err(e) => log::warn!("Error getting message properties: {e:?}"),
+        }
     }
 
     /// Fetches the reactions that can be added to this message from TDLib.

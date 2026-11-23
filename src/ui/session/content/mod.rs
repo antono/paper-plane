@@ -3,10 +3,12 @@ mod chat_action_bar;
 mod chat_history;
 mod chat_history_row;
 mod chat_info_window;
+mod chat_picker_dialog;
 mod event_row;
 mod media_viewer;
 mod media_viewer_page;
 mod message_row;
+mod message_selection;
 mod send_media_window;
 
 use std::sync::OnceLock;
@@ -21,6 +23,7 @@ pub(crate) use self::chat_action_bar::ChatActionBar;
 pub(crate) use self::chat_history::ChatHistory;
 pub(crate) use self::chat_history_row::ChatHistoryRow;
 pub(crate) use self::chat_info_window::ChatInfoWindow;
+pub(crate) use self::chat_picker_dialog::ChatPickerDialog;
 pub(crate) use self::event_row::EventRow;
 pub(crate) use self::media_viewer::MediaViewer;
 pub(crate) use self::media_viewer::ViewerEntry;
@@ -51,6 +54,7 @@ pub(crate) use self::message_row::MessageVideo;
 pub(crate) use self::message_row::MessageVoiceNote;
 pub(crate) use self::message_row::ReactionsChooser;
 pub(crate) use self::message_row::Row as MessageRow;
+pub(crate) use self::message_selection::MessageSelection;
 pub(crate) use self::send_media_window::SendMediaWindow;
 use crate::model;
 
@@ -148,6 +152,11 @@ impl Content {
         self.imp().chat_history.set_chat_open(open);
     }
 
+    /// Leaves the selection mode of the chat history.
+    pub(crate) fn clear_selection(&self) {
+        self.imp().chat_history.selection().clear();
+    }
+
     fn set_chat(&self, chat: Option<&model::Chat>) {
         if self.chat().as_ref() == chat {
             return;
@@ -174,4 +183,6 @@ pub(crate) fn gtk_checks() {
     media_viewer::gtk_check();
     chat_history::gtk_check();
     chat_action_bar::gtk_check();
+    message_selection::gtk_check();
+    chat_picker_dialog::gtk_check();
 }

@@ -23,6 +23,7 @@ pub(crate) use self::content::ChatActionBar;
 pub(crate) use self::content::ChatHistory;
 pub(crate) use self::content::ChatHistoryRow;
 pub(crate) use self::content::ChatInfoWindow;
+pub(crate) use self::content::ChatPickerDialog;
 pub(crate) use self::content::Content;
 pub(crate) use self::content::EventRow;
 pub(crate) use self::content::MediaAlbumGrid;
@@ -46,6 +47,7 @@ pub(crate) use self::content::MessagePhoto;
 pub(crate) use self::content::MessageReactions;
 pub(crate) use self::content::MessageReply;
 pub(crate) use self::content::MessageRow;
+pub(crate) use self::content::MessageSelection;
 pub(crate) use self::content::MessageSticker;
 pub(crate) use self::content::MessageText;
 pub(crate) use self::content::MessageVenue;
@@ -181,6 +183,22 @@ mod imp {
                 "model" => self.obj().model().to_value(),
                 _ => unimplemented!(),
             }
+        }
+
+        fn constructed(&self) {
+            self.parent_constructed();
+
+            // Going back (the edge swipe on a phone, where Escape does not
+            // exist) leaves the selection mode, which would otherwise outlive
+            // the page: reopening the same chat does not reset it.
+            let content = self.content.get().downgrade();
+            self.split_view
+                .connect_show_content_notify(move |split_view| {
+                    if let (false, Some(content)) = (split_view.shows_content(), content.upgrade())
+                    {
+                        content.clear_selection();
+                    }
+                });
         }
     }
 

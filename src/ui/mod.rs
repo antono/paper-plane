@@ -3,9 +3,9 @@ mod client_view;
 mod components;
 mod login;
 mod session;
-mod window;
 #[cfg(test)]
 mod tests;
+mod window;
 
 use gtk::glib::prelude::*;
 
@@ -38,6 +38,7 @@ pub(crate) use self::session::ChatActionBar;
 pub(crate) use self::session::ChatHistory;
 pub(crate) use self::session::ChatHistoryRow;
 pub(crate) use self::session::ChatInfoWindow;
+pub(crate) use self::session::ChatPickerDialog;
 pub(crate) use self::session::ContactRow;
 pub(crate) use self::session::ContactsWindow;
 pub(crate) use self::session::Content;
@@ -63,6 +64,7 @@ pub(crate) use self::session::MessagePhoto;
 pub(crate) use self::session::MessageReactions;
 pub(crate) use self::session::MessageReply;
 pub(crate) use self::session::MessageRow;
+pub(crate) use self::session::MessageSelection;
 pub(crate) use self::session::MessageSticker;
 pub(crate) use self::session::MessageText;
 pub(crate) use self::session::MessageVenue;
@@ -104,6 +106,7 @@ pub(crate) fn init() {
     ChatHistory::static_type();
     ChatHistoryRow::static_type();
     ChatInfoWindow::static_type();
+    ChatPickerDialog::static_type();
     CircularProgressBar::static_type();
     ClientManagerView::static_type();
     ClientView::static_type();

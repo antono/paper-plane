@@ -192,6 +192,28 @@ impl Application {
                 None => log::warn!("auto-history-action: missing parameters"),
             },
         );
+        self.add_auto_action("auto-copy-selected", None, |app, _| {
+            app.auto_copy_selected()
+        });
+        self.add_auto_action(
+            "auto-delete-selected",
+            Some(glib::VariantTy::BOOLEAN),
+            |app, p| match p.and_then(|p| p.get::<bool>()) {
+                Some(revoke) => app.auto_delete_selected(revoke),
+                None => log::warn!("auto-delete-selected: missing revoke flag"),
+            },
+        );
+        self.add_auto_action(
+            "auto-forward-selected",
+            Some(glib::VariantTy::INT64),
+            |app, p| match p.and_then(|p| p.get::<i64>()) {
+                Some(chat_id) => app.auto_forward_selected(chat_id),
+                None => log::warn!("auto-forward-selected: missing chat id"),
+            },
+        );
+        self.add_auto_action("auto-delete-options", None, |app, _| {
+            app.auto_delete_options()
+        });
         self.add_auto_action("auto-download-media", None, |app, _| {
             app.auto_download_media()
         });
@@ -262,6 +284,11 @@ impl Application {
         self.auto_window()
             .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
             .and_then(|history| history.chat())
+    }
+
+    fn chat_history(&self) -> Option<ui::ChatHistory> {
+        self.auto_window()
+            .and_then(|w| descendant::<ui::ChatHistory>(w.upcast_ref()))
     }
 
     /// A loaded message of the open chat.
@@ -377,6 +404,39 @@ impl Application {
             }
         }
 
+        if let Some(history) = self.chat_history() {
+            let ids: Vec<String> = history
+                .selection()
+                .ids()
+                .iter()
+                .map(|id| id.to_string())
+                .collect();
+            out.push_str(&format!(
+                "selection\t{}\t{}\n",
+                history.selection().active(),
+                ids.join(",")
+            ));
+            out.push_str(&format!(
+                "selection-title\t{}\n",
+                history.selection_title_text()
+            ));
+            out.push_str(&format!(
+                "bottom-bar\t{}\n",
+                history.bottom_page().unwrap_or_default()
+            ));
+            let mut text_views = 0;
+            walk(history.upcast_ref(), &mut |widget| {
+                // The composer is an editable text view as well
+                if widget
+                    .downcast_ref::<gtk::TextView>()
+                    .is_some_and(|view| !view.is_editable())
+                {
+                    text_views += 1;
+                }
+            });
+            out.push_str(&format!("selected-text-view\t{text_views}\n"));
+        }
+
         // What the chat history shows: the pictures with content and the
         // replies with the text of their target.
         if let Some(history) = self
@@ -462,12 +522,58 @@ impl Application {
             log::warn!("auto-history-action: no chat history");
             return;
         };
-        let parameter =
-            matches!(name, "jump-to-message" | "reply").then(|| message_id.to_variant());
+        let parameter = matches!(name, "jump-to-message" | "reply" | "toggle-selection")
+            .then(|| message_id.to_variant());
         if let Err(e) = history.activate_action(&format!("chat-history.{name}"), parameter.as_ref())
         {
             log::warn!("auto-history-action: {e}");
         }
+    }
+
+    /// Copies the selection like the Copy button of the selection bar and
+    /// writes the copied text to `copied.txt`.
+    fn auto_copy_selected(&self) {
+        match self.chat_history() {
+            Some(history) => write_artifact("copied.txt", history.copy_selected().as_bytes()),
+            None => log::warn!("auto-copy-selected: no chat history"),
+        }
+    }
+
+    /// Deletes the selection as the delete dialog does after the choice.
+    fn auto_delete_selected(&self, revoke: bool) {
+        match self.chat_history() {
+            Some(history) => history.delete_selected(revoke),
+            None => log::warn!("auto-delete-selected: no chat history"),
+        }
+    }
+
+    /// Forwards the selection to the chat, without the chat picker.
+    fn auto_forward_selected(&self, chat_id: ChatId) {
+        let (Some(history), Some(session)) = (self.chat_history(), self.active_session()) else {
+            log::warn!("auto-forward-selected: no chat history");
+            return;
+        };
+        let Some(chat) = session.try_chat(chat_id) else {
+            log::warn!("auto-forward-selected: unknown chat {chat_id}");
+            return;
+        };
+        utils::spawn(async move { history.forward_selected_to(&chat).await });
+    }
+
+    /// Writes what the delete dialog would offer for the selection to
+    /// `delete-options.txt`.
+    fn auto_delete_options(&self) {
+        let Some(history) = self.chat_history() else {
+            log::warn!("auto-delete-options: no chat history");
+            return;
+        };
+        utils::spawn(async move {
+            let (me, everyone) = history.delete_options().await;
+            write_artifact(
+                "delete-options.txt",
+                format!("me\t{me}\neveryone\t{everyone}\n").as_bytes(),
+            );
+        });
     }
 
     /// Searches for `query` in the sidebar; the results are in state.txt.

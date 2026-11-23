@@ -1,9 +1,11 @@
 use gtk::gdk;
 use gtk::glib;
+use gtk::graphene;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::CompositeTemplate;
 
+use crate::model;
 use crate::ui;
 use crate::utils;
 
@@ -40,8 +42,8 @@ mod imp {
     impl MessageBase {
         #[template_callback]
         fn on_right_click_pressed(&self) {
-            // Claim the event sequence so that selectable labels don't
-            // receive it and show their own context menu.
+            // Claim the event sequence so that the label below doesn't
+            // receive the press (it would show its own context menu).
             self.right_click.set_state(gtk::EventSequenceState::Claimed);
         }
 
@@ -52,9 +54,55 @@ mod imp {
 
         #[template_callback]
         fn on_long_pressed(&self, x: f64, y: f64) {
+            // Claiming also cancels the selection click of the row, so the
+            // release doesn't toggle the message back.
             self.right_long_press
                 .set_state(gtk::EventSequenceState::Claimed);
-            self.show_message_menu(x as i32, y as i32);
+
+            let row = utils::ancestor::<_, ui::MessageRow>(&*self.obj());
+            if self.select_word_at(&row, x, y) {
+                return;
+            }
+            let can_select = row.message().is::<model::Message>();
+            if can_select && !(row.selection_active() && row.is_selected()) {
+                // Enters the selection mode, or adds to the selection
+                row.activate_action("message-row.select", None).unwrap();
+            } else {
+                // A message that is already selected keeps its menu
+                // reachable on touch (React, Edit).
+                self.show_message_menu(x as i32, y as i32);
+            }
+        }
+
+        /// A long press on the selectable text selects the word under it, like
+        /// in Telegram, instead of opening the menu.
+        fn select_word_at(&self, row: &ui::MessageRow, x: f64, y: f64) -> bool {
+            let Some(text_view) = row.active_text_view() else {
+                return false;
+            };
+            let Some(point) = self
+                .obj()
+                .compute_point(&text_view, &graphene::Point::new(x as f32, y as f32))
+            else {
+                return false;
+            };
+            let (x, y) = (point.x() as i32, point.y() as i32);
+            if x < 0 || y < 0 || x >= text_view.width() || y >= text_view.height() {
+                return false;
+            }
+
+            let (x, y) = text_view.window_to_buffer_coords(gtk::TextWindowType::Widget, x, y);
+            let Some(mut start) = text_view.iter_at_location(x, y) else {
+                return false;
+            };
+            if !start.starts_word() {
+                start.backward_word_start();
+            }
+            let mut end = start;
+            end.forward_word_end();
+            text_view.buffer().select_range(&start, &end);
+
+            true
         }
 
         fn show_message_menu(&self, x: i32, y: i32) {

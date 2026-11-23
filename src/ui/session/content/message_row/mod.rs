@@ -25,12 +25,14 @@ mod venue;
 mod video;
 mod voice;
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use adw::prelude::*;
 use gettextrs::gettext;
 use glib::clone;
+use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::subclass::prelude::*;
@@ -88,6 +90,21 @@ mod imp {
         /// current message's chat, which is used to update the actions when
         /// the chat's reaction settings change.
         pub(super) chat_properties_handler_id: RefCell<Option<glib::SignalHandlerId>>,
+        /// The round check mark of the selection mode, the first child.
+        pub(super) check: gtk::Image,
+        pub(super) check_added: Cell<bool>,
+        pub(super) selection_active: Cell<bool>,
+        pub(super) selected: Cell<bool>,
+        /// Whether the text of the message is selectable (it is the only
+        /// selected message).
+        pub(super) text_selectable: Cell<bool>,
+        /// Whether the current press may toggle the selection on release.
+        pub(super) selection_armed: Cell<bool>,
+        /// How often the selection click claimed its sequence.
+        #[cfg(test)]
+        pub(super) claims: Cell<u32>,
+        #[template_child]
+        pub(super) selection_click: TemplateChild<gtk::GestureClick>,
     }
 
     #[glib::object_subclass]
@@ -115,6 +132,9 @@ mod imp {
             });
             klass.install_action("message-row.copy-text", None, move |widget, _, _| {
                 widget.copy_text()
+            });
+            klass.install_action("message-row.select", None, move |widget, _, _| {
+                widget.select()
             });
         }
 
@@ -151,7 +171,14 @@ mod imp {
             }
         }
 
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().ensure_check();
+        }
+
         fn dispose(&self) {
+            self.check.unparent();
+
             if let Some(avatar) = self.avatar.borrow().as_ref() {
                 avatar.unparent();
             }
@@ -184,6 +211,177 @@ impl Row {
     fn on_released(&self, n_press: i32, _x: f64, _y: f64) {
         if n_press == 2 && self.can_reply_to_message() {
             self.reply();
+        }
+    }
+
+    /// Whether a click selects the message instead of using what is below it:
+    /// always in the selection mode, with Ctrl otherwise.
+    fn selection_click_wanted_now(&self, ctrl: bool) -> bool {
+        // Sponsored messages can't be selected.
+        self.message().is::<model::Message>()
+            && selection_click_wanted(self.imp().selection_active.get(), ctrl)
+    }
+
+    #[template_callback]
+    fn on_selection_pressed(&self, n_press: i32, x: f64, y: f64) {
+        let imp = self.imp();
+        imp.selection_armed.set(false);
+
+        // Taps, double taps and drags on the selectable text belong to its
+        // text view (words, handles). A tap elsewhere in the row still toggles.
+        if let Some(text_view) = self.active_text_view() {
+            let picked = self.pick(x, y, gtk::PickFlags::DEFAULT);
+            if picked.is_some_and(|picked| picked == text_view || picked.is_ancestor(&text_view)) {
+                return;
+            }
+        }
+
+        let ctrl = imp
+            .selection_click
+            .current_event_state()
+            .contains(gdk::ModifierType::CONTROL_MASK);
+        if !self.selection_click_wanted_now(ctrl) {
+            return;
+        }
+
+        // A mouse has no scroll gesture to protect, so claiming at once also
+        // cancels the links and media below. A touch is claimed on release
+        // instead: a drag that scrolls the history is then claimed by the
+        // scrolled window first and never toggles the row.
+        let is_touch = imp
+            .selection_click
+            .current_event_device()
+            .is_some_and(|device| device.source() == gdk::InputSource::Touchscreen);
+
+        // The second press of a double click with a mouse must not undo the
+        // first, but it is still claimed so that it does not reply to the
+        // message. GTK counts quick taps as multi-presses wherever they land,
+        // and every tap is a toggle for the user (undoing a mis-tap), so a
+        // touch is always armed.
+        imp.selection_armed
+            .set(press_arms_toggle(is_touch, n_press));
+
+        if !is_touch {
+            self.claim_selection_click();
+        }
+    }
+
+    #[template_callback]
+    fn on_selection_released(&self, _n_press: i32, _x: f64, _y: f64) {
+        let imp = self.imp();
+        if !imp.selection_armed.replace(false) {
+            return;
+        }
+
+        // Cancels the link and media gestures below before they handle the
+        // release.
+        self.claim_selection_click();
+        self.select();
+    }
+
+    fn claim_selection_click(&self) {
+        let imp = self.imp();
+        imp.selection_click
+            .set_state(gtk::EventSequenceState::Claimed);
+        // An emitted signal has no event sequence to claim, so tests count.
+        #[cfg(test)]
+        imp.claims.set(imp.claims.get() + 1);
+    }
+
+    #[template_callback]
+    fn on_selection_cancelled(&self) {
+        self.imp().selection_armed.set(false);
+    }
+
+    fn select(&self) {
+        if let Ok(message) = self.message().downcast::<model::Message>() {
+            self.activate_action(
+                "chat-history.toggle-selection",
+                Some(&message.id().to_variant()),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Creates the check mark and puts it first, before the avatar and the
+    /// content.
+    fn ensure_check(&self) {
+        let imp = self.imp();
+        if imp.check_added.replace(true) {
+            return;
+        }
+        let check = &imp.check;
+
+        check.set_icon_name(Some("object-select-symbolic"));
+        check.add_css_class("selection-check");
+        check.set_valign(gtk::Align::Center);
+        check.set_can_target(false);
+        check.set_visible(false);
+        check.insert_after(self, gtk::Widget::NONE);
+    }
+
+    /// The text view of the message while its text is selectable.
+    pub(crate) fn active_text_view(&self) -> Option<gtk::TextView> {
+        self.imp()
+            .content
+            .borrow()
+            .as_ref()
+            .and_then(find_message_label)
+            .and_then(|label| label.text_view())
+    }
+
+    fn message_label(&self) -> Option<ui::MessageLabel> {
+        self.imp()
+            .content
+            .borrow()
+            .as_ref()
+            .and_then(find_message_label)
+    }
+
+    fn apply_text_selectable(&self) {
+        if let Some(label) = self.message_label() {
+            label.set_text_selectable(self.imp().text_selectable.get());
+        }
+    }
+
+    pub(crate) fn selection_active(&self) -> bool {
+        self.imp().selection_active.get()
+    }
+
+    pub(crate) fn is_selected(&self) -> bool {
+        self.imp().selected.get()
+    }
+
+    /// Shows or hides the check mark and highlights the row if selected. The
+    /// text of the message is selectable if `text_selectable`.
+    pub(crate) fn set_selection_state(&self, active: bool, selected: bool, text_selectable: bool) {
+        let imp = self.imp();
+        imp.selection_active.set(active);
+        imp.selected.set(selected);
+        imp.text_selectable
+            .set(active && selected && text_selectable);
+        self.apply_text_selectable();
+        // A link in a label claims the touch before the row sees it, so while
+        // selecting, the label is out of the way and a tap reaches the row.
+        if let Some(label) = self.message_label() {
+            label.set_selecting(active);
+        }
+        // The menu of an already selected message has no Select item, which
+        // would deselect it.
+        self.update_actions();
+
+        imp.check.set_visible(active);
+        for widget in [imp.check.upcast_ref::<gtk::Widget>(), self.upcast_ref()] {
+            let class = if widget == self.upcast_ref::<gtk::Widget>() {
+                "selected-message"
+            } else {
+                "selected"
+            };
+            if active && selected {
+                widget.add_css_class(class);
+            } else {
+                widget.remove_css_class(class);
+            }
         }
     }
 
@@ -320,8 +518,9 @@ impl Row {
                         avatar.set_size(AVATAR_SIZE);
                         avatar.set_valign(gtk::Align::End);
 
-                        // Insert at the beginning
-                        avatar.insert_after(self, gtk::Widget::NONE);
+                        // Insert after the check mark, at the beginning
+                        self.ensure_check();
+                        avatar.insert_after(self, Some(&imp.check));
 
                         *avatar_borrow = Some(avatar.clone());
                         avatar
@@ -474,6 +673,11 @@ impl Row {
     fn update_actions(&self) {
         self.action_set_enabled("message-row.reply", self.can_reply_to_message());
         self.action_set_enabled("message-row.edit", self.can_edit_message());
+        self.action_set_enabled(
+            "message-row.select",
+            self.message().is::<model::Message>()
+                && !(self.selection_active() && self.is_selected()),
+        );
 
         if let Some(message) = self.message().downcast_ref::<model::Message>() {
             self.action_set_enabled("message-row.delete", message.can_be_deleted_only_for_self());
@@ -587,8 +791,13 @@ impl Row {
             }
             None => {
                 if let Some(old_content) = &*content_ref {
+                    // Do not leave a text view behind in a discarded label
+                    if let Some(label) = find_message_label(old_content) {
+                        label.set_text_selectable(false);
+                    }
                     old_content.unparent();
                 }
+                let text_selectable = self.imp().text_selectable.get();
                 log::debug!(
                     "Row::update_specific_content: creating {}",
                     std::any::type_name::<B>(),
@@ -602,9 +811,29 @@ impl Row {
                 content.insert_before(self, gtk::Widget::NONE);
 
                 *content_ref = Some(content.upcast());
+                drop(content_ref);
+                // The new content has a new label
+                if let Some(label) = self.message_label() {
+                    label.set_selecting(self.selection_active());
+                }
+                if text_selectable {
+                    self.apply_text_selectable();
+                }
             }
         }
     }
+}
+
+/// Whether a press in the selection mode toggles the message on release. A
+/// touch toggles on every tap, a mouse not on the second press of a double
+/// click.
+fn press_arms_toggle(is_touch: bool, n_press: i32) -> bool {
+    is_touch || n_press == 1
+}
+
+/// Whether a click on a row selects it, see `Row::on_selection_pressed`.
+fn selection_click_wanted(active: bool, ctrl: bool) -> bool {
+    active || ctrl
 }
 
 fn find_message_label(widget: &gtk::Widget) -> Option<ui::MessageLabel> {
@@ -623,7 +852,7 @@ fn find_message_label(widget: &gtk::Widget) -> Option<ui::MessageLabel> {
     None
 }
 
-fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
+pub(super) fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
     use tdlib::enums::ChatMemberStatus::*;
     let member_status = match chat.chat_type() {
         model::ChatType::Supergroup(supergroup) => Some(supergroup.status()),
@@ -645,10 +874,34 @@ fn can_send_messages_in_chat(chat: &model::Chat) -> bool {
         .unwrap_or(true)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A click selects a row in the selection mode, or with Ctrl.
+    #[test]
+    fn taps_toggle_every_time() {
+        assert!(press_arms_toggle(false, 1));
+        assert!(!press_arms_toggle(false, 2));
+        assert!(press_arms_toggle(true, 1));
+        assert!(press_arms_toggle(true, 2));
+        assert!(press_arms_toggle(true, 3));
+    }
+
+    #[test]
+    fn selection_click_wanted() {
+        assert!(!super::selection_click_wanted(false, false));
+        assert!(super::selection_click_wanted(false, true));
+        assert!(super::selection_click_wanted(true, false));
+        assert!(super::selection_click_wanted(true, true));
+    }
+}
+
 /// The checks of the message rows that need GTK, see `ui::tests`.
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     rows_gtk_check();
+    selection_row_gtk_check();
     bubble::gtk_check();
     voice::gtk_check();
     media_video_tile::gtk_check();
@@ -736,6 +989,174 @@ fn rows_gtk_check() {
             .map(|t| t.to_string());
         assert_eq!(copied.as_deref(), Some("copy *me*"));
 
+        // With a selection in the text view of the single selected message,
+        // Copy Text copies the selection (and not the whole text).
+        row.set_selection_state(true, true, true);
+        let buffer = row.active_text_view().expect("a text view").buffer();
+        buffer.select_range(&buffer.iter_at_offset(6), &buffer.iter_at_offset(8));
+        row.activate_action("message-row.copy-text", None).unwrap();
+        let copied = glib::MainContext::default()
+            .block_on(row.clipboard().read_text_future())
+            .unwrap()
+            .map(|t| t.to_string());
+        assert_eq!(copied.as_deref(), Some("me"));
+        // A content type switch of the selected message keeps exactly one
+        // text view, on the label of the new content.
+        let old_label = find_message_label(&content(&row)).expect("a label");
+        new_message(&session, message(ME, 3, DAY, 0, photo("a caption")));
+        let photo_message = chat.message(3).unwrap();
+        row.set_message(photo_message.upcast());
+        assert!(
+            old_label.text_view().is_none(),
+            "the old label lost its text view"
+        );
+        let views = |row: &Row| usize::from(row.active_text_view().is_some());
+        assert_eq!(views(&row), 1, "the caption of the photo has the view");
+        row.set_message(text_message.clone().upcast());
+        assert_eq!(views(&row), 1, "back to text: one text view");
+        row.set_selection_state(false, false, false);
+        assert!(row.active_text_view().is_none());
+
         drop(history);
+    });
+}
+
+/// The check mark of a row in the selection mode and the Select menu item.
+#[cfg(test)]
+fn selection_row_gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("selection mode: row check mark follows recycling");
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        // The history keeps the messages alive, the chat only holds them weakly.
+        let history = model::ChatHistoryModel::new(&chat);
+        new_message(&session, message(ME, 1, DAY, 0, text("one")));
+        new_message(&session, message(ME, 2, DAY, 0, text("two")));
+        let (one, two) = (chat.message(1).unwrap(), chat.message(2).unwrap());
+
+        let row = Row::new(one.upcast_ref());
+        let check = row.imp().check.clone();
+        assert!(
+            !check.is_visible(),
+            "no check mark outside the selection mode"
+        );
+        assert!(row.first_child() == Some(check.clone().upcast()));
+
+        row.set_selection_state(true, true, false);
+        assert!(check.is_visible());
+        assert!(check.has_css_class("selected"));
+        assert!(row.has_css_class("selected-message"));
+
+        // The list view reuses the row for another message, which is not
+        // selected: the state is computed from the new item.
+        let selection = ui::MessageSelection::default();
+        selection.set_chat(Some(&chat));
+        selection.toggle(&[1]);
+        let history_row = ui::ChatHistoryRow::new();
+        history_row.set_item(Some(
+            model::ChatHistoryItem::for_message(two.clone()).upcast(),
+        ));
+        let row = history_row.child().and_downcast::<Row>().unwrap();
+        row.set_selection_state(true, true, false);
+        history_row.sync_selection_with(&selection);
+        assert!(row.imp().check.is_visible());
+        assert!(!row.imp().check.has_css_class("selected"));
+        assert!(!row.has_css_class("selected-message"));
+
+        history_row.set_item(Some(
+            model::ChatHistoryItem::for_message(one.clone()).upcast(),
+        ));
+        history_row.sync_selection_with(&selection);
+        assert!(row.imp().check.has_css_class("selected"));
+        drop(history);
+    });
+
+    eprintln!("selection mode: taps, long press and the Select item of a row");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ui::ChatHistory::new();
+        history.set_chat(Some(&chat));
+        for id in 1..=2 {
+            new_message(&session, message(42, id, DAY + id as i32, 0, text("text")));
+        }
+        let row = Row::new(chat.message(1).unwrap().upcast_ref());
+        row.set_parent(&history);
+        let click = row.imp().selection_click.clone();
+        let tap = |n_press: i32| {
+            click.emit_by_name::<()>("pressed", &[&n_press, &5f64, &5f64]);
+            click.emit_by_name::<()>("released", &[&n_press, &5f64, &5f64]);
+        };
+        let claims = || row.imp().claims.get();
+        let toggle = |id: i64| {
+            history
+                .activate_action("chat-history.toggle-selection", Some(&id.to_variant()))
+                .unwrap()
+        };
+
+        // A plain click is for the links and the media below, not for the row.
+        tap(1);
+        assert!(!history.selection().active());
+        assert_eq!(claims(), 0, "nothing is claimed outside the mode");
+
+        // In the mode a tap toggles the message and claims the sequence, so
+        // that the link or media below does not activate.
+        toggle(2);
+        row.set_selection_state(true, false, false);
+        tap(1);
+        assert_eq!(history.selection().ids(), [1, 2]);
+        assert_eq!(claims(), 2, "claimed on press and on release");
+        tap(1);
+        assert_eq!(history.selection().ids(), [2]);
+
+        // The second press of a double click with a mouse is claimed only.
+        let before = claims();
+        tap(2);
+        assert_eq!(
+            history.selection().ids(),
+            [2],
+            "no toggle by a double click"
+        );
+        assert_eq!(claims(), before + 1, "but claimed on press");
+
+        // Links must not take the tap of a message that is being selected.
+        let label = row.message_label().unwrap();
+        assert_eq!(label.links_work(), (false, false));
+        row.set_selection_state(false, false, false);
+        assert_eq!(label.links_work(), (true, true));
+        row.set_selection_state(true, false, false);
+
+        // The Select item of an already selected message would deselect it.
+        assert!(row.activate_action("message-row.select", None).is_ok());
+        assert_eq!(history.selection().ids(), [1, 2], "Select selects");
+        row.set_selection_state(true, true, false);
+        row.activate_action("message-row.select", None).unwrap();
+        assert_eq!(
+            history.selection().ids(),
+            [1, 2],
+            "no Select item for a selected message"
+        );
+        history.selection().clear();
+        row.set_selection_state(false, false, false);
+
+        // A long press starts the mode with the message.
+        let long_press = row
+            .imp()
+            .content
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .observe_controllers()
+            .iter::<glib::Object>()
+            .find_map(|c| c.ok()?.downcast::<gtk::GestureLongPress>().ok())
+            .expect("a long press gesture");
+        long_press.emit_by_name::<()>("pressed", &[&5f64, &5f64]);
+        assert_eq!(history.selection().ids(), [1]);
+
+        row.unparent();
     });
 }

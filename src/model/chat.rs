@@ -523,6 +523,42 @@ impl Chat {
         })
     }
 
+    /// Deletes several messages with one TDLib request.
+    pub(crate) async fn delete_messages(
+        &self,
+        ids: Vec<i64>,
+        revoke: bool,
+    ) -> Result<(), tdlib::types::Error> {
+        tdlib::functions::delete_messages(self.id(), ids, revoke, self.client_id()?).await
+    }
+
+    /// Forwards the messages of the chat `from` to this chat, keeping the
+    /// "Forwarded from" header. The sent messages arrive through the usual
+    /// updates, like any other sent message.
+    pub(crate) async fn forward_messages(
+        &self,
+        from: &model::Chat,
+        ids: Vec<i64>,
+    ) -> Result<(), tdlib::types::Error> {
+        let client_id = self.client_id()?;
+
+        for chunk in forward_chunks(ids) {
+            tdlib::functions::forward_messages(
+                self.id(),
+                None,
+                from.id(),
+                chunk,
+                None,
+                false,
+                false,
+                client_id,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
     /// Returns the `Message` of the specified id, if present in the cache.
     pub(crate) fn message(&self, id: MessageId) -> Option<model::Message> {
         self.imp()
@@ -718,6 +754,16 @@ impl Chat {
     }
 }
 
+/// The most messages TDLib forwards with one request.
+const FORWARD_LIMIT: usize = 100;
+
+/// Splits the ids into requests of at most `FORWARD_LIMIT`, oldest first, so
+/// that the forwarded messages keep their order.
+fn forward_chunks(mut ids: Vec<i64>) -> Vec<Vec<i64>> {
+    ids.sort_unstable();
+    ids.chunks(FORWARD_LIMIT).map(<[i64]>::to_vec).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,5 +904,22 @@ mod tests {
             message.toggle_reaction("👍");
             while context.iteration(false) {}
         });
+    }
+
+    #[test]
+    fn forwarding_is_split_into_sorted_chunks() {
+        assert!(forward_chunks(vec![]).is_empty());
+
+        let ids: Vec<i64> = (1..=250).rev().collect();
+        let chunks = forward_chunks(ids);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+            [100, 100, 50]
+        );
+        assert_eq!(chunks.concat(), (1..=250).collect::<Vec<i64>>());
+
+        // Exactly one full request, not an extra empty one.
+        assert_eq!(forward_chunks((1..=100).collect()).len(), 1);
     }
 }

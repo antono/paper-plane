@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -721,6 +722,173 @@ def test_quits_although_tdlib_hangs_at_exit(app):
     app.assert_all_requests_supported()
 
 
+def selection(app):
+    """The selection of the open chat: whether it is active, and its ids."""
+    active, ids = app.state()["selection"]
+    return active == "true", [int(i) for i in ids.split(",") if i]
+
+
+def select(app, *ids):
+    """Toggles the messages like a long press or a Ctrl+click does."""
+    for id in ids:
+        app.action("auto-history-action", f"('toggle-selection', int64 {id})")
+    app.wait_for(
+        f"messages {ids} selected",
+        lambda: set(ids) <= set(selection(app)[1]),
+    )
+
+
+def open_selection_chat(app, chat_id, count):
+    app.wait_until_logged_in()
+    app.open_chat(chat_id)
+    app.wait_for(
+        f"the history of chat {chat_id}",
+        lambda: len(app.state()["messages"]) == count,
+    )
+
+
+def test_selection_copy_and_reply(app):
+    """Selecting messages switches the header and the bottom bar, copying
+    puts one line per message on the clipboard, and a single selected message
+    shows its text in a selectable text view."""
+    open_selection_chat(app, 1001, 4)
+    state = app.state()
+    assert state["selection"] == ["false", ""], state["selection"]
+    assert state["bottom-bar"] == ["composer"], state["bottom-bar"]
+
+    select(app, 1, 2)
+    state = app.state()
+    assert state["selection"] == ["true", "1,2"], state["selection"]
+    assert state["selection-title"] == ["2 selected"], state["selection-title"]
+    assert state["bottom-bar"] == ["selection"], state["bottom-bar"]
+    # Only a single selected message gets a text view
+    assert state["selected-text-view"] == ["0"], state["selected-text-view"]
+
+    # Copy: "[HH:MM] Sender: text", oldest first (the time depends on the
+    # time zone)
+    (app.out / "copied.txt").unlink(missing_ok=True)
+    app.action("auto-copy-selected")
+    copied = app.wait_for("copied.txt", lambda: (app.out / "copied.txt").exists() and app.artifact("copied.txt"))
+    lines = copied.splitlines()
+    assert len(lines) == 2, copied
+    # The sender is the chat partner for an incoming and the user for an
+    # outgoing message
+    assert re.fullmatch(r"\[\d\d:\d\d\] Alice Example: Alice first", lines[0]), lines
+    assert re.fullmatch(r"\[\d\d:\d\d\] Test User: Me second", lines[1]), lines
+    app.wait_for("the selection to end", lambda: not selection(app)[0])
+    assert app.state()["bottom-bar"] == ["composer"]
+
+    # One selected message: its text is selectable
+    select(app, 3)
+    state = app.state()
+    assert state["selection"] == ["true", "3"], state["selection"]
+    assert state["selection-title"] == ["1 selected"], state["selection-title"]
+    app.wait_for(
+        "the text view of the selected message",
+        lambda: app.state()["selected-text-view"] == ["1"],
+    )
+
+    # Cancel brings the composer back
+    app.action("auto-history-action", "('cancel-selection', int64 0)")
+    app.wait_for("the composer", lambda: app.state()["bottom-bar"] == ["composer"])
+    assert selection(app) == (False, [])
+    app.wait_for(
+        "the text view to be gone",
+        lambda: app.state()["selected-text-view"] == ["0"],
+    )
+
+    # Reply: one selected message becomes the reply target, and the
+    # selection ends
+    select(app, 3)
+    app.action("auto-history-action", "('reply-selected', int64 0)")
+    app.wait_for("the selection to end", lambda: not selection(app)[0])
+    assert app.state()["bottom-bar"] == ["composer"]
+    app.action("auto-send-text", "'Replying to the selection'")
+    sent = app.wait_for("the reply", lambda: app.requests("sendMessage"))
+    reply_to = sent[0]["request"].get("reply_to") or {}
+    assert reply_to.get("message_id") == 3, sent[0]["request"]
+
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_selection_delete(app):
+    """Deleting the selection is one request; deleting for everyone is only
+    offered if every selected message allows it."""
+    open_selection_chat(app, 1001, 4)
+
+    def delete_options():
+        (app.out / "delete-options.txt").unlink(missing_ok=True)
+        app.action("auto-delete-options")
+        text = app.wait_for(
+            "delete-options.txt",
+            lambda: (app.out / "delete-options.txt").exists() and app.artifact("delete-options.txt"),
+        )
+        return dict(line.split("\t") for line in text.splitlines())
+
+    # One message that can't be deleted for everyone forbids it for all
+    select(app, 2, 3)
+    assert delete_options() == {"me": "true", "everyone": "false"}
+    app.action("auto-history-action", "('cancel-selection', int64 0)")
+    app.wait_for("the selection to end", lambda: not selection(app)[0])
+
+    select(app, 1, 3)
+    assert delete_options() == {"me": "true", "everyone": "true"}
+    app.action("auto-delete-selected", "boolean true")
+    app.wait_for(
+        "the messages to be deleted",
+        lambda: sorted(id for id, _ in app.state()["messages"]) == [2, 4],
+    )
+    request = app.requests("deleteMessages")[0]["request"]
+    assert request["message_ids"] == [1, 3], request
+    assert request["revoke"] is True, request
+    assert request["chat_id"] == 1001, request
+    assert not selection(app)[0]
+
+    # Message 2 is not deletable for everyone
+    select(app, 2)
+    assert delete_options() == {"me": "true", "everyone": "false"}
+    app.action("auto-delete-selected", "boolean false")
+    app.wait_for(
+        "the message to be deleted",
+        lambda: sorted(id for id, _ in app.state()["messages"]) == [4],
+    )
+    request = app.requests("deleteMessages")[1]["request"]
+    assert request["message_ids"] == [2], request
+    assert request["revoke"] is False, request
+
+    app.quit()
+    app.assert_all_requests_supported()
+
+
+def test_selection_forward(app):
+    """Forwarding sends one forwardMessages request to the picked chat with
+    the selected messages, and ends the selection."""
+    open_selection_chat(app, 1001, 4)
+    select(app, 1, 4)
+    app.action("auto-forward-selected", "int64 1002")
+    requests = app.wait_for("forwardMessages", lambda: app.requests("forwardMessages"))
+    request = requests[0]["request"]
+    assert request["chat_id"] == 1002, request
+    assert request["from_chat_id"] == 1001, request
+    assert request["message_ids"] == [1, 4], request
+    assert request["send_copy"] is False, request
+    app.wait_for("the selection to end", lambda: not selection(app)[0])
+
+    # The forwarded messages arrive in the target chat
+    app.open_chat(1002)
+    app.wait_for(
+        "the forwarded messages in Bob's chat",
+        lambda: len(app.state()["messages"]) == 3,
+    )
+    texts = [text for _, text in sorted(app.state()["messages"])]
+    assert texts[-2:] == ["Alice first", "Me fourth"], texts
+    assert not selection(app)[0]
+
+    app.quit()
+    app.assert_all_requests_supported()
+
+
 TESTS = [
     ("chat-list-open-and-send", "two-chats.json", test_chat_list_open_and_send),
     ("login-with-phone-number", "login.json", test_login_with_phone_number),
@@ -738,6 +906,9 @@ TESTS = [
     ("register-a-new-account", "registration.json", test_register_a_new_account),
     ("replies-photos-and-files-are-sent", "two-chats.json", test_replies_photos_and_files_are_sent),
     ("quits-although-tdlib-hangs-at-exit", "hang-at-exit.json", test_quits_although_tdlib_hangs_at_exit),
+    ("selection-copy-and-reply", "selection.json", test_selection_copy_and_reply),
+    ("selection-delete", "selection.json", test_selection_delete),
+    ("selection-forward", "selection.json", test_selection_forward),
 ]
 
 

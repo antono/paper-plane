@@ -79,6 +79,63 @@ Ctrl+scrolling, double clicks and taps): `gtk:media viewer page: zooming a
 photo`, `gtk:media viewer: zoom buttons and keys`, and the `zoom` mutations
 in tests/mutations.py.
 
+Selectable text of the single selected message (a read-only GtkTextView that
+replaces the label): `label::tests::links_to_spans` and the gtk checks `message
+text view: swap, read-only and focus`, `links keep their targets`, `same height
+as the label`, `selection is copied`, `selection mode: only the single selected
+message gets a text view`, and the `selection text` mutations. Touch handles, the
+magnifier and the long press that selects a word need a touch screen and are not
+covered.
+
+Forwarding with a chat picker: `model::chat::tests::forwarding_is_split_into_sorted_chunks`
+and the gtk checks `chat picker: lists and filters the main chat list`, `chat
+picker: activating a row emits chat-picked` and `selection mode: forward is
+enabled only while selecting`, plus the `forward` mutations. The TDLib round
+trip of `forwardMessages` is covered by the end-to-end test of the selection
+mode.
+
+Selecting messages (a long press on touch, the Select item of the message
+menu, Ctrl+click, Esc or Cancel to leave, an album row selecting all its
+members) and the selection bar with Reply (only for one message), Copy
+("[HH:MM] Sender: text" per line, oldest first), Forward (through the chat
+picker) and Delete (for everyone only if every message allows it): the unit
+tests `message_selection::tests::toggle_adds_and_removes_groups` and
+`formats_copied_lines`, the gtk checks `selection mode: header, action bar and
+reply visibility`, `copy`, `album rows select all members`, `the Select item of
+the message menu`, `mapped rows follow the selection and recycling`, `row check
+mark follows recycling`, `deleted messages leave the selection`, `only the
+single selected message gets a text view` and `forward is enabled only while
+selecting`. The end-to-end tests `selection-copy-and-reply`, `selection-delete`
+and `selection-forward` drive the selection through the automation bridge
+against the fake TDLib: the header and bottom bar, the copied text, the single
+message's text view, the `deleteMessages` request with its `revoke` flag, the
+delete options from `getMessageProperties` (message 2 of the scenario can not be
+deleted for everyone) and the `forwardMessages` request with its chats, ids and
+`send_copy`. The `selection:` mutations in tests/mutations.py cover each of
+these behaviours. The gesture wiring is driven by emitting the signals of the
+row's gestures (`selection mode: taps, long press and the Select item of a row`):
+a tap toggles in the mode and not outside it, claims the sequence so that links
+and media do not activate, and a double click with a mouse claims without
+toggling; a long press starts the mode; a selected message has no Select item;
+links of a label are out of the way while selecting. The Escape shortcut and its
+being disabled without a selection and behind the picker (`Escape leaves it`),
+Reply needing a writable chat (`Reply needs a chat that can be written to`), the
+Forward refusal for messages that can not be forwarded, the guard against a second
+picker while the properties load and the picker closing (`Forward refuses, guards
+and cancels`), the delete dialog's responses (`chat_history::tests`) and its
+snapshot guard (`delete follows the choice for the same selection`) are covered
+too, as is acting only on selected messages that are still known. Not covered: a
+real touch (every tap toggling, claiming only on release, the scrolling that wins
+over a tap; `message_row::tests::taps_toggle_every_time` covers the decision
+only), Ctrl+click (no event state can be emitted), the AlertDialog and the
+`GtkLabel` link claiming the touch outside selection mode (a long press or a drag
+that starts on a link), the map of a location or venue opening on release, going
+back on a phone leaving the mode, the picker not raising the on-screen keyboard
+and the narrow layout of the action bar. Touch handles and scrolling need a touch
+screen. The fake orders forwarded messages as a
+pending `updateNewMessage` followed by `updateMessageSendSucceeded`, which is
+inferred and not checked against TDLib.
+
 ## Known gaps
 
 None. The behaviour that the independent review of 2026-11-20 found untested is

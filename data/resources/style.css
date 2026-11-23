@@ -151,6 +151,31 @@ listview.chat-history > row {
   border-radius: 9px;
 }
 
+/* Selection mode: a round check mark at the row and a highlighted row */
+.selection-check {
+  -gtk-icon-size: 14px;
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 9999px;
+  border: 2px solid alpha(@window_fg_color, .5);
+}
+
+/* Hide the glyph without touching the color, which the ring does not use */
+.selection-check:not(.selected) {
+  -gtk-icon-filter: opacity(0);
+}
+
+.selection-check.selected {
+  background: @accent_bg_color;
+  color: @accent_fg_color;
+  border-color: transparent;
+}
+
+.selected-message {
+  background: alpha(@accent_bg_color, .15);
+  border-radius: 9px;
+}
+
 /* Values for the cairo renderer */
 .fallback {
   background: @view_bg_color;
@@ -666,4 +691,10 @@ splitbutton.small-pill:dir(ltr) > menubutton > button {
 /* Media viewer */
 .media-viewer .osd {
   background-color: alpha(black, 0.6);
+}
+
+/* The selectable text of a single selected message, see MessageLabel */
+textview.message-text-view,
+textview.message-text-view > text {
+  background: transparent;
 }

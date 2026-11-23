@@ -475,6 +475,7 @@ impl Engine {
                         client_id,
                         enums::MessageProperties::MessageProperties(scenario::message_properties(
                             &message,
+                            &self.scenario.undeletable_for_all,
                         )),
                         extra,
                     ),
@@ -546,6 +547,8 @@ impl Engine {
                 );
             }
             "sendMessage" => self.send_message(client_id, request, extra),
+            "forwardMessages" => self.forward_messages(client_id, request, extra),
+            "deleteMessages" => self.delete_messages(client_id, request, extra),
             "close" => {
                 self.ok(client_id, extra);
                 self.auth_state(client_id, enums::AuthorizationState::Closing);
@@ -607,6 +610,126 @@ impl Engine {
         } as i64;
         let start = (start + offset).clamp(0, newest_first.len() as i64) as usize;
         newest_first[start..].iter().take(limit).map(|m| (*m).clone()).collect()
+    }
+
+    /// Copies the messages to the target chat as messages of the user, with
+    /// the forward info of the originals unless a copy was asked for. As for
+    /// sendMessage, the pending message is announced first and then replaced
+    /// by the sent one (the order is inferred, not checked against TDLib).
+    fn forward_messages(&mut self, client_id: i32, request: &Value, extra: Option<&Value>) {
+        let chat_id = request["chat_id"].as_i64().unwrap_or_default();
+        let from_chat_id = request["from_chat_id"].as_i64().unwrap_or_default();
+        if !self.messages.contains_key(&chat_id) || !self.messages.contains_key(&from_chat_id) {
+            self.error(client_id, extra, 400, "Chat not found");
+            return;
+        }
+        let send_copy = request["send_copy"].as_bool().unwrap_or(false);
+        let me = self.scenario.me.id;
+        let date = self.scenario.now + 1;
+        let ids: Vec<i64> = request["message_ids"]
+            .as_array()
+            .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+
+        let mut pendings = vec![];
+        for id in ids {
+            let Some(original) = self.messages[&from_chat_id].get(&id).cloned() else {
+                continue;
+            };
+            let pending_id = self.next_pending_id;
+            self.next_pending_id += 1;
+            let sent_id = self.next_sent_id;
+            self.next_sent_id += 1;
+
+            let mut copy = original.clone();
+            copy.chat_id = chat_id;
+            copy.is_outgoing = true;
+            copy.sender_id = enums::MessageSender::User(types::MessageSenderUser { user_id: me });
+            copy.date = date;
+            copy.forward_info = (!send_copy).then(|| types::MessageForwardInfo {
+                origin: match &original.sender_id {
+                    enums::MessageSender::User(user) => {
+                        enums::MessageOrigin::User(types::MessageOriginUser {
+                            sender_user_id: user.user_id,
+                        })
+                    }
+                    enums::MessageSender::Chat(chat) => {
+                        enums::MessageOrigin::Chat(types::MessageOriginChat {
+                            sender_chat_id: chat.chat_id,
+                            author_signature: String::new(),
+                        })
+                    }
+                },
+                date: original.date,
+                source: None,
+                public_service_announcement_type: String::new(),
+            });
+
+            let mut pending = copy.clone();
+            pending.id = pending_id;
+            pending.sending_state = Some(enums::MessageSendingState::Pending(
+                types::MessageSendingStatePending { sending_id: 0 },
+            ));
+            let mut sent = copy;
+            sent.id = sent_id;
+            sent.sending_state = None;
+            pendings.push((pending, sent, pending_id));
+        }
+
+        let messages = types::Messages {
+            total_count: pendings.len() as i32,
+            messages: pendings.iter().map(|(p, _, _)| Some(p.clone())).collect(),
+        };
+        self.emit(client_id, enums::Messages::Messages(messages), extra);
+        for (pending, sent, pending_id) in pendings {
+            self.update(
+                client_id,
+                enums::Update::NewMessage(types::UpdateNewMessage { message: pending }),
+            );
+            self.messages
+                .get_mut(&chat_id)
+                .unwrap()
+                .insert(sent.id, sent.clone());
+            self.update(
+                client_id,
+                enums::Update::MessageSendSucceeded(types::UpdateMessageSendSucceeded {
+                    message: sent,
+                    old_message_id: pending_id,
+                }),
+            );
+        }
+    }
+
+    /// Removes the messages. Deleting for everyone fails for the messages
+    /// that the scenario lists as undeletable for all.
+    fn delete_messages(&mut self, client_id: i32, request: &Value, extra: Option<&Value>) {
+        let chat_id = request["chat_id"].as_i64().unwrap_or_default();
+        if !self.messages.contains_key(&chat_id) {
+            self.error(client_id, extra, 400, "Chat not found");
+            return;
+        }
+        let revoke = request["revoke"].as_bool().unwrap_or(false);
+        let ids: Vec<i64> = request["message_ids"]
+            .as_array()
+            .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+        if revoke && ids.iter().any(|id| self.scenario.undeletable_for_all.contains(id)) {
+            self.error(client_id, extra, 400, "MESSAGE_DELETE_FORBIDDEN");
+            return;
+        }
+        for id in &ids {
+            self.messages.get_mut(&chat_id).unwrap().remove(id);
+        }
+        self.update(
+            client_id,
+            enums::Update::DeleteMessages(types::UpdateDeleteMessages {
+                chat_id,
+                message_ids: ids,
+                is_permanent: true,
+                from_cache: false,
+            }),
+        );
+        self.ok(client_id, extra);
     }
 
     fn send_message(&mut self, client_id: i32, request: &Value, extra: Option<&Value>) {

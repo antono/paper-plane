@@ -28,6 +28,7 @@
     <file compressed="true" preprocess="xml-stripblanks">session/content/chat_action_bar.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">session/content/chat_history.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">session/content/chat_info_window.ui</file>
+    <file compressed="true" preprocess="xml-stripblanks">session/content/chat_picker_dialog.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">session/content/event_row.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">session/content/media_viewer.ui</file>
     <file compressed="true" preprocess="xml-stripblanks">session/content/message_menu.ui</file>

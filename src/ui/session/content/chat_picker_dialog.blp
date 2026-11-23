@@ -1,0 +1,56 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PaplChatPickerDialog : Adw.Dialog {
+  title: _("Forward To");
+  content-width: 360;
+  content-height: 520;
+  // Not the entry: its focus raises the on-screen keyboard over the list.
+  focus-widget: list_view;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    [top]
+    SearchBar {
+      search-mode-enabled: true;
+      // Typing on a hardware keyboard still searches.
+      key-capture-widget: template;
+
+      child: SearchEntry search_entry {
+        placeholder-text: _("Search");
+        hexpand: true;
+        search-changed => $on_search_changed() swapped;
+        activate => $on_search_activate() swapped;
+      };
+    }
+
+    content: Stack stack {
+      StackPage {
+        name: "list";
+
+        child: ScrolledWindow {
+          hscrollbar-policy: never;
+          vexpand: true;
+
+          ListView list_view {
+            single-click-activate: true;
+            activate => $on_activate() swapped;
+
+            styles ["navigation-sidebar"]
+          }
+        };
+      }
+
+      StackPage {
+        name: "empty";
+
+        child: Adw.StatusPage {
+          title: _("No Chats Found");
+          icon-name: "system-search-symbolic";
+        };
+      }
+    };
+  };
+}
