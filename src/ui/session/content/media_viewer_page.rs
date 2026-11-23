@@ -30,6 +30,9 @@ mod imp {
         pub(super) zoom: Cell<f64>,
         /// The zoom when a pinch started.
         pub(super) zoom_start: Cell<f64>,
+        /// The point of the unzoomed photo under the fingers when a pinch
+        /// started: it stays under them while they move.
+        pub(super) pinch_point: Cell<Option<(f64, f64)>>,
         /// Where to scroll the zoomed photo once it is allocated, so that
         /// the point under the pointer or the fingers stays in place.
         pub(super) pending_scroll: Cell<Option<(f64, f64)>>,
@@ -500,8 +503,6 @@ impl MediaViewerPage {
     /// point at `anchor` (in page coordinates, the center by default) in
     /// place.
     pub(crate) fn set_zoom(&self, zoom: f64, anchor: Option<(f64, f64)>) {
-        let imp = self.imp();
-
         let zoom = if self.can_zoom() {
             zoom.clamp(1.0, MAX_ZOOM)
         } else {
@@ -512,13 +513,38 @@ impl MediaViewerPage {
             return;
         }
 
-        let (width, height) = (self.width() as f64, self.height() as f64);
-        let (x, y) = anchor.unwrap_or((width / 2.0, height / 2.0));
-        let hadj = imp.zoom_scroll.hadjustment();
-        let vadj = imp.zoom_scroll.vadjustment();
-        // The point of the unzoomed photo under the anchor
-        let (px, py) = ((hadj.value() + x) / old, (vadj.value() + y) / old);
+        let anchor = anchor.unwrap_or((self.width() as f64 / 2.0, self.height() as f64 / 2.0));
+        let point = self.photo_point_at(anchor);
+        self.zoom_keeping(zoom, point, anchor);
+    }
 
+    /// The scroll position of the zoomed photo, including a scroll that is
+    /// still to be applied: several zoom steps can come before the next
+    /// allocation, e.g. while pinching.
+    fn scroll_position(&self) -> (f64, f64) {
+        let imp = self.imp();
+        imp.pending_scroll.get().unwrap_or_else(|| {
+            (
+                imp.zoom_scroll.hadjustment().value(),
+                imp.zoom_scroll.vadjustment().value(),
+            )
+        })
+    }
+
+    /// The point of the unzoomed photo at `(x, y)` in page coordinates.
+    fn photo_point_at(&self, (x, y): (f64, f64)) -> (f64, f64) {
+        let zoom = self.zoom();
+        let (sx, sy) = self.scroll_position();
+        ((sx + x) / zoom, (sy + y) / zoom)
+    }
+
+    /// Zooms to `zoom` (already clamped) and scrolls so that `point` of the
+    /// unzoomed photo is at `anchor` in page coordinates.
+    fn zoom_keeping(&self, zoom: f64, (px, py): (f64, f64), (x, y): (f64, f64)) {
+        let imp = self.imp();
+        let (width, height) = (self.width() as f64, self.height() as f64);
+
+        let changed = (zoom - self.zoom()).abs() >= f64::EPSILON;
         imp.zoom.set(zoom);
         if zoom > 1.0 {
             imp.picture.set_size_request(
@@ -531,7 +557,35 @@ impl MediaViewerPage {
             imp.pending_scroll.set(None);
         }
         self.queue_resize();
-        self.notify("zoom");
+        if changed {
+            self.notify("zoom");
+        }
+    }
+
+    /// Starts a pinch with the fingers around `center`, if the item can be
+    /// zoomed.
+    fn begin_pinch(&self, center: (f64, f64)) -> bool {
+        let imp = self.imp();
+        if !self.can_zoom() {
+            return false;
+        }
+        imp.zoom_start.set(self.zoom());
+        imp.pinch_point.set(Some(self.photo_point_at(center)));
+        true
+    }
+
+    /// Follows the fingers of a pinch: the photo point that was under them
+    /// when it started stays under them, also when they move together.
+    fn update_pinch(&self, scale: f64, center: (f64, f64)) {
+        let imp = self.imp();
+        let Some(point) = imp.pinch_point.get() else {
+            return;
+        };
+        if !self.can_zoom() {
+            return;
+        }
+        let zoom = (imp.zoom_start.get() * scale).clamp(1.0, MAX_ZOOM);
+        self.zoom_keeping(zoom, point, center);
     }
 
     /// Multiplies the zoom by `factor` around `anchor`, or the pointer.
@@ -548,17 +602,30 @@ impl MediaViewerPage {
         pinch.connect_begin(clone!(
             #[weak(rename_to = obj)]
             self,
-            move |_, _| {
-                obj.imp().zoom_start.set(obj.zoom());
+            move |gesture, _| {
+                if gesture
+                    .bounding_box_center()
+                    .is_some_and(|center| obj.begin_pinch(center))
+                {
+                    // The fingers zoom and move the photo now: the scrolled
+                    // window must not scroll it too, nor the carousel swipe.
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                }
             }
         ));
         pinch.connect_scale_changed(clone!(
             #[weak(rename_to = obj)]
             self,
             move |gesture, scale| {
-                let anchor = gesture.bounding_box_center();
-                obj.set_zoom(obj.imp().zoom_start.get() * scale, anchor);
+                if let Some(center) = gesture.bounding_box_center() {
+                    obj.update_pinch(scale, center);
+                }
             }
+        ));
+        pinch.connect_end(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, _| obj.imp().pinch_point.set(None)
         ));
         self.add_controller(pinch);
 
@@ -753,6 +820,36 @@ pub(crate) fn gtk_check() {
         allocate(&page);
         assert_eq!(page.zoom(), 2.0 * ZOOM_STEP);
         assert_eq!(imp.zoom_scroll.hadjustment().value(), 150.0);
+
+        // A pinch keeps the photo point under the fingers, also when several
+        // steps come before the next allocation.
+        page.set_zoom(1.0, None);
+        allocate(&page);
+        assert!(page.begin_pinch((200.0, 150.0)));
+        page.update_pinch(1.5, (200.0, 150.0));
+        page.update_pinch(2.0, (200.0, 150.0));
+        allocate(&page);
+        assert_eq!(page.zoom(), 2.0);
+        assert_eq!(imp.zoom_scroll.hadjustment().value(), 200.0);
+        assert_eq!(imp.zoom_scroll.vadjustment().value(), 150.0);
+        // Moving the fingers together moves the photo with them.
+        imp.pinch_point.set(None);
+        assert!(page.begin_pinch((100.0, 100.0)));
+        page.update_pinch(1.0, (150.0, 130.0));
+        allocate(&page);
+        assert_eq!(page.zoom(), 2.0);
+        assert_eq!(imp.zoom_scroll.hadjustment().value(), 150.0);
+        assert_eq!(imp.zoom_scroll.vadjustment().value(), 120.0);
+        imp.pinch_point.set(None);
+
+        // Quick zoom steps before the next allocation, e.g. Ctrl+scrolling,
+        // keep the point in place too.
+        page.set_zoom(1.0, None);
+        allocate(&page);
+        page.zoom_by(ZOOM_STEP, Some((100.0, 100.0)));
+        page.zoom_by(ZOOM_STEP, Some((100.0, 100.0)));
+        allocate(&page);
+        assert_eq!(imp.zoom_scroll.hadjustment().value(), 56.25);
 
         // The zoom is limited, and back at 1 the photo fits again.
         page.zoom_by(100.0, None);
