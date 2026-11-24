@@ -515,9 +515,12 @@ impl MediaViewer {
         imp.closed.set(false);
         imp.is_fetching.set(false);
 
-        if let Some(manager) = self.playback_manager() {
-            manager.stop();
-        }
+        // The shared playback is deliberately left alone here: stopping it
+        // tears its pipeline down synchronously on the main thread, which
+        // blocks for as long as the audio device takes to respond, so the
+        // UI would freeze before any photo is shown. A video of a previous
+        // opening is still stopped by the deactivation of its page below,
+        // and a video of this opening takes the stream over when it plays.
 
         imp.session.set(Some(&session));
         imp.chat.set(Some(chat));
@@ -554,11 +557,14 @@ impl MediaViewer {
             .unwrap();
         imp.carousel.scroll_to(&page, false);
 
+        // The transition starts before the media is displayed, so that the
+        // viewer shows up with the placeholder of the active page even if
+        // the display of the media takes a while.
+        self.reveal(source_widget);
+
         self.display_item(imp.active_index.get());
 
         self.maybe_fetch_older();
-
-        self.reveal(source_widget);
     }
 
     /// Reveals the viewer with a transition that starts at `source_widget`.
