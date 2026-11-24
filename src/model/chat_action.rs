@@ -56,10 +56,7 @@ impl ChatAction {
         glib::Object::builder()
             .property("chat", chat)
             .property("action-type", model::BoxedChatActionType(type_))
-            .property(
-                "sender",
-                model::MessageSender::new(&chat.session_(), sender),
-            )
+            .property("sender", model::MessageSender::new(chat, sender))
             .build()
     }
 

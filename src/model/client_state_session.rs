@@ -154,14 +154,18 @@ impl ClientStateSession {
         self.imp().chats.borrow().get(&id).cloned()
     }
 
-    /// Returns the `model::Chat` of the specified id. Panics if the chat is not present.
+    /// The chat that an update is about, or `None` with a warning if the
+    /// session does not know it.
     ///
-    /// Note that TDLib guarantees that types are always returned before their ids,
-    /// so if you use an id returned by TDLib, it should be expected that the
-    /// relative `model::Chat` exists in the list.
-    pub(crate) fn chat(&self, id: ChatId) -> model::Chat {
-        self.try_chat(id)
-            .expect("Failed to get expected model::Chat")
+    /// TDLib sends `updateNewChat` before any other use of a chat id, so this
+    /// only misses if that update was lost; the update is then dropped instead
+    /// of panicking.
+    fn chat_of_update(&self, id: ChatId, update: &tdlib::enums::Update) -> Option<model::Chat> {
+        let chat = self.try_chat(id);
+        if chat.is_none() {
+            log::warn!("Dropping an update for the unknown chat {id}: {update:?}");
+        }
+        chat
     }
 
     pub(crate) fn upsert_user(&self, td_user: tdlib::types::User) -> model::User {
@@ -416,41 +420,115 @@ impl ClientStateSession {
                 let chat = model::Chat::new(self, data.chat);
                 self.imp().chats.borrow_mut().insert(chat.id(), chat);
             }
-            ChatTitle(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatPhoto(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatPermissions(ref data) => self.chat(data.chat_id).handle_update(update),
+            ChatTitle(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatPhoto(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatPermissions(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
             ChatLastMessage(ref data) => {
-                let chat = self.chat(data.chat_id);
+                let Some(chat) = self.chat_of_update(data.chat_id, &update) else {
+                    return;
+                };
                 for position in &data.positions {
                     self.handle_chat_position_update(&chat, position);
                 }
                 chat.handle_update(update);
             }
             ChatPosition(ref data) => {
-                self.handle_chat_position_update(&self.chat(data.chat_id), &data.position)
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    self.handle_chat_position_update(&chat, &data.position)
+                }
             }
-            ChatReadInbox(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatReadOutbox(ref data) => self.chat(data.chat_id).handle_update(update),
+            ChatReadInbox(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatReadOutbox(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
             ChatDraftMessage(ref data) => {
-                let chat = self.chat(data.chat_id);
+                let Some(chat) = self.chat_of_update(data.chat_id, &update) else {
+                    return;
+                };
                 for position in &data.positions {
                     self.handle_chat_position_update(&chat, position);
                 }
                 chat.handle_update(update);
             }
             ChatFolders(_) => self.chat_folder_list().handle_update(update),
-            ChatNotificationSettings(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatUnreadMentionCount(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatBlockList(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatIsMarkedAsUnread(ref data) => self.chat(data.chat_id).handle_update(update),
-            DeleteMessages(ref data) => self.chat(data.chat_id).handle_update(update),
-            ChatAction(ref data) => self.chat(data.chat_id).handle_update(update),
-            MessageContent(ref data) => self.chat(data.chat_id).handle_update(update),
-            MessageEdited(ref data) => self.chat(data.chat_id).handle_update(update),
-            MessageInteractionInfo(ref data) => self.chat(data.chat_id).handle_update(update),
-            MessageMentionRead(ref data) => self.chat(data.chat_id).handle_update(update),
-            MessageSendSucceeded(ref data) => self.chat(data.message.chat_id).handle_update(update),
-            NewMessage(ref data) => self.chat(data.message.chat_id).handle_update(update),
+            ChatNotificationSettings(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatUnreadMentionCount(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatBlockList(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatIsMarkedAsUnread(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            DeleteMessages(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            ChatAction(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            MessageContent(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            MessageEdited(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            MessageInteractionInfo(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            MessageMentionRead(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            MessageSendSucceeded(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.message.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
+            NewMessage(ref data) => {
+                if let Some(chat) = self.chat_of_update(data.message.chat_id, &update) {
+                    chat.handle_update(update)
+                }
+            }
             BasicGroup(data) => {
                 let mut basic_groups = self.imp().basic_groups.borrow_mut();
                 match basic_groups.entry(data.basic_group.id) {
@@ -546,5 +624,90 @@ impl ClientStateSession {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tdlib::enums;
+    use tdlib::types;
+
+    use super::*;
+    use crate::model::test_support::*;
+
+    /// The id of a chat that no `updateNewChat` introduced.
+    const UNKNOWN: ChatId = -1_001_370_000_137;
+
+    /// Updates about a chat the session does not know are dropped instead of
+    /// panicking in the main loop.
+    #[test]
+    fn updates_of_an_unknown_chat_are_dropped() {
+        isolated(|| {
+            let session = session();
+            session.handle_update(enums::Update::ChatTitle(types::UpdateChatTitle {
+                chat_id: UNKNOWN,
+                title: "Gone".to_owned(),
+            }));
+            session.handle_update(enums::Update::ChatPosition(types::UpdateChatPosition {
+                chat_id: UNKNOWN,
+                position: types::ChatPosition {
+                    list: enums::ChatList::Main,
+                    order: 137,
+                    is_pinned: false,
+                    source: None,
+                },
+            }));
+            new_message(&session, message(UNKNOWN, 1, DAY, 0, text("lost")));
+            assert!(session.try_chat(UNKNOWN).is_none());
+        });
+    }
+
+    /// A message whose sender chat or forward origin is not known yet (a reply
+    /// of TDLib can overtake the `updateNewChat` of these chats) is still
+    /// built: the sender falls back to the chat of the message, the origin to
+    /// the author signature.
+    #[test]
+    fn messages_referring_to_an_unknown_chat_are_built() {
+        isolated(|| {
+            let session = session();
+            let chat = add_chat(&session, ME);
+
+            let mut td_message = message(ME, 1, DAY, 0, text("forwarded"));
+            td_message.sender_id =
+                enums::MessageSender::Chat(types::MessageSenderChat { chat_id: UNKNOWN });
+            td_message.forward_info = Some(types::MessageForwardInfo {
+                origin: enums::MessageOrigin::Channel(types::MessageOriginChannel {
+                    chat_id: UNKNOWN,
+                    message_id: 137,
+                    author_signature: "Author".to_owned(),
+                }),
+                date: DAY - 60,
+                source: None,
+                public_service_announcement_type: String::new(),
+            });
+            let built = model::Message::new(&chat, td_message);
+
+            assert!(matches!(built.sender(), model::MessageSender::Chat(c) if c == chat));
+            assert!(matches!(
+                built.forward_info().unwrap().origin(),
+                model::MessageForwardOrigin::HiddenUser { sender_name } if sender_name == "Author"
+            ));
+
+            let mut td_message = message(ME, 2, DAY, 0, text("forwarded"));
+            td_message.forward_info = Some(types::MessageForwardInfo {
+                origin: enums::MessageOrigin::Chat(types::MessageOriginChat {
+                    sender_chat_id: UNKNOWN,
+                    author_signature: String::new(),
+                }),
+                date: DAY - 60,
+                source: None,
+                public_service_announcement_type: String::new(),
+            });
+            let built = model::Message::new(&chat, td_message);
+            assert!(matches!(
+                built.forward_info().unwrap().origin(),
+                model::MessageForwardOrigin::HiddenUser { .. }
+            ));
+        });
     }
 }

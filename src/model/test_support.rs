@@ -293,7 +293,7 @@ fn add_chat_of_type(
     };
 
     session.handle_update(enums::Update::NewChat(types::UpdateNewChat { chat }));
-    session.chat(id)
+    session.try_chat(id).expect("the new chat is known")
 }
 
 pub(crate) fn formatted_text(text: &str) -> types::FormattedText {

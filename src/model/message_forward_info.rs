@@ -78,25 +78,43 @@ impl MessageForwardInfo {
     pub(crate) fn new(chat: &model::Chat, forward_info: tdlib::types::MessageForwardInfo) -> Self {
         use tdlib::enums::MessageOrigin::*;
 
+        let session = chat.session_();
+
+        // An origin chat that the session does not know (yet) is shown like a
+        // hidden user with the author signature instead of panicking: replies
+        // of TDLib can overtake the `updateNewChat` that introduces it.
+        let unknown_chat = |chat_id, author_signature: String| {
+            log::warn!(
+                "Unknown origin chat {chat_id} of a forwarded message in chat {}",
+                chat.id()
+            );
+            MessageForwardOrigin::HiddenUser {
+                sender_name: author_signature,
+            }
+        };
+
         let origin = match forward_info.origin {
-            User(data) => MessageForwardOrigin::User(chat.session_().user(data.sender_user_id)),
-            Chat(data) => MessageForwardOrigin::Chat {
-                // author_signature: data.author_signature,
-                chat: chat.session_().chat(data.sender_chat_id),
+            User(data) => MessageForwardOrigin::User(session.user(data.sender_user_id)),
+            Chat(data) => match session.try_chat(data.sender_chat_id) {
+                Some(chat) => MessageForwardOrigin::Chat {
+                    // author_signature: data.author_signature,
+                    chat,
+                },
+                None => unknown_chat(data.sender_chat_id, data.author_signature),
             },
-            Channel(data) => {
-                let chat = chat.session_().chat(data.chat_id);
+            Channel(data) => match session.try_chat(data.chat_id) {
                 // let message = {
                 //     let weak = glib::WeakRef::new();
                 //     weak.set(chat.history().message_by_id(data.message_id).as_ref());
                 //     weak
                 // };
-                MessageForwardOrigin::Channel {
+                Some(chat) => MessageForwardOrigin::Channel {
                     // author_signature: data.author_signature,
                     chat,
                     // message,
-                }
-            }
+                },
+                None => unknown_chat(data.chat_id, data.author_signature),
+            },
             HiddenUser(data) => MessageForwardOrigin::HiddenUser {
                 sender_name: data.sender_name,
             },

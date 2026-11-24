@@ -20,6 +20,7 @@ pub(crate) use self::section::Section;
 pub(crate) use self::section::SectionType;
 pub(crate) use self::section_row::SectionRow;
 use crate::model;
+use crate::types::ChatId;
 use crate::ui;
 use crate::utils;
 
@@ -242,7 +243,7 @@ impl Search {
                     .chat_ids
                     .iter()
                     .filter(|id| !found_chat_ids.contains(id))
-                    .map(|id| session.chat(*id))
+                    .filter_map(|id| known_chat(&session, *id))
                     .collect();
 
                 found_chat_ids.append(&mut data.chat_ids);
@@ -287,7 +288,7 @@ impl Search {
                             None
                         } else {
                             found_chat_ids.push(id);
-                            Some(session.chat(id))
+                            known_chat(&session, id)
                         }
                     })
                     .collect();
@@ -352,7 +353,7 @@ impl Search {
                         if found_chat_ids.contains(&id) {
                             None
                         } else {
-                            Some(session.chat(id))
+                            known_chat(&session, id)
                         }
                     })
                     .collect();
@@ -395,4 +396,17 @@ impl Search {
 
         self.emit_by_name::<()>("close", &[]);
     }
+}
+
+/// The chat of a search result, or `None` if the session does not know it yet.
+///
+/// TDLib sends the `updateNewChat` of every found chat before the result, but
+/// the result can reach the search before that update reaches the session.
+/// Such a chat is left out of the results instead of panicking.
+fn known_chat(session: &model::ClientStateSession, id: ChatId) -> Option<model::Chat> {
+    let chat = session.try_chat(id);
+    if chat.is_none() {
+        log::warn!("Search result {id} is not a known chat yet, leaving it out");
+    }
+    chat
 }

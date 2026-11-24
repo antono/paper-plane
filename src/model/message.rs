@@ -21,15 +21,25 @@ pub(crate) enum MessageSender {
 }
 
 impl MessageSender {
-    pub(crate) fn new(
-        session: &model::ClientStateSession,
-        sender: &tdlib::enums::MessageSender,
-    ) -> Self {
+    /// The sender of a message or chat action in `chat`.
+    ///
+    /// A sender chat that the session does not know (yet) falls back to `chat`
+    /// itself instead of panicking: replies of TDLib can overtake the
+    /// `updateNewChat` that introduces the sender chat.
+    pub(crate) fn new(chat: &model::Chat, sender: &tdlib::enums::MessageSender) -> Self {
         use tdlib::enums::MessageSender::*;
 
+        let session = chat.session_();
         match sender {
             User(data) => Self::User(session.user(data.user_id)),
-            Chat(data) => Self::Chat(session.chat(data.chat_id)),
+            Chat(data) => Self::Chat(session.try_chat(data.chat_id).unwrap_or_else(|| {
+                log::warn!(
+                    "Unknown sender chat {} in chat {}, showing the chat itself",
+                    data.chat_id,
+                    chat.id()
+                );
+                chat.clone()
+            })),
         }
     }
 
@@ -132,7 +142,7 @@ impl Message {
             .property("id", td_message.id)
             .property(
                 "sender",
-                model::MessageSender::new(&chat.session_(), &td_message.sender_id),
+                model::MessageSender::new(chat, &td_message.sender_id),
             )
             .property("is-outgoing", td_message.is_outgoing)
             .property(

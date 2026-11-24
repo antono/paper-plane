@@ -252,7 +252,16 @@ fn handle_notification_group(
         notification_group.removed_notification_ids.len()
     );
 
-    let chat = session.chat(notification_group.chat_id);
+    // The update of a notification group follows the `updateNewChat` of its
+    // chat, so this only misses if that update was lost.
+    let Some(chat) = session.try_chat(notification_group.chat_id) else {
+        log::warn!(
+            "Ignoring the notification group {} of the unknown chat {}",
+            notification_group.notification_group_id,
+            notification_group.chat_id
+        );
+        return;
+    };
 
     for notification in notification_group.added_notifications {
         let notification_id = notification.id.to_string();
