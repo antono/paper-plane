@@ -174,7 +174,7 @@ impl Registration {
         }
 
         dialog.choose(
-            self.root().unwrap().downcast_ref::<gtk::Window>().unwrap(),
+            Some(self.root().unwrap().downcast_ref::<gtk::Window>().unwrap()),
             gio::Cancellable::NONE,
             clone!(
                 #[weak(rename_to = obj)]

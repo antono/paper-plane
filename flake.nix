@@ -70,7 +70,6 @@
 
           cargoDeps = pkgs.rustPlatform.importCargoLock {
             lockFile = ./Cargo.lock;
-            allowBuiltinFetchGit = true; # origami and gtk-rlottie-rs
           };
 
           nativeBuildInputs = nativeBuildInputsFor pkgs ++ [ pkgs.rustPlatform.cargoSetupHook ];

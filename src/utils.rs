@@ -385,7 +385,12 @@ mod tests {
 
     #[test]
     fn photo_sizes_for_scale_factors() {
-        let sizes = [size("m", 320), size("x", 800), size("y", 1280), size("w", 2560)];
+        let sizes = [
+            size("m", 320),
+            size("x", 800),
+            size("y", 1280),
+            size("w", 2560),
+        ];
         assert_eq!(picked(&sizes, 1).as_deref(), Some("x"));
         assert_eq!(picked(&sizes, 2).as_deref(), Some("y"));
         assert_eq!(picked(&sizes, 3).as_deref(), Some("w"));
@@ -403,8 +408,8 @@ pub(crate) fn gtk_check() {
     eprintln!("minithumbnail textures");
 
     let pixels = glib::Bytes::from_owned(vec![255u8, 0, 0, 255]);
-    let png = gdk::MemoryTexture::new(1, 1, gdk::MemoryFormat::R8g8b8a8, &pixels, 4)
-        .save_to_png_bytes();
+    let png =
+        gdk::MemoryTexture::new(1, 1, gdk::MemoryFormat::R8g8b8a8, &pixels, 4).save_to_png_bytes();
     let minithumbnail = |data: String| tdlib::types::Minithumbnail {
         width: 1,
         height: 1,

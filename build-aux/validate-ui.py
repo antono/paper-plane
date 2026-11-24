@@ -25,9 +25,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GObject, Gtk  # noqa: E402
 
-# Classes of these libraries are checked; any other class (Papl*, Content,
-# Ori* from libadwaita-rs' companion crate origami...) belongs to the
-# application or a Rust crate and is built by the template test instead.
+# Classes of these libraries are checked; any other class (Papl*, Content...)
+# belongs to the application and is built by the template test instead.
 NAMESPACES = {"Gtk": Gtk, "Gdk": Gdk, "Adw": Adw, "G": Gio}
 try:
     gi.require_version("Shumate", "1.0")

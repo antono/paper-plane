@@ -245,7 +245,7 @@ impl Password {
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
 
         dialog.choose(
-            self.root().unwrap().downcast_ref::<gtk::Window>().unwrap(),
+            Some(self.root().unwrap().downcast_ref::<gtk::Window>().unwrap()),
             gio::Cancellable::NONE,
             clone!(
                 #[weak(rename_to = obj)]
@@ -334,7 +334,7 @@ impl Password {
         dialog.set_default_response(Some("ok"));
 
         dialog.choose(
-            self.root().unwrap().downcast_ref::<gtk::Window>().unwrap(),
+            Some(self.root().unwrap().downcast_ref::<gtk::Window>().unwrap()),
             gio::Cancellable::NONE,
             clone!(
                 #[weak(rename_to = obj)]

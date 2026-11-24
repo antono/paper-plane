@@ -131,7 +131,7 @@ impl Login {
         let model = self.model_();
 
         dialog.choose(
-            self.root().unwrap().downcast_ref::<gtk::Window>().unwrap(),
+            Some(self.root().unwrap().downcast_ref::<gtk::Window>().unwrap()),
             gio::Cancellable::NONE,
             clone!(
                 #[weak]

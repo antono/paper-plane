@@ -156,9 +156,8 @@ pub(crate) fn gtk_check() {
         // A reply in the Replies chat is a forward of the original message:
         // its sender is shown as the original author, not the Replies bot.
         let mut td_message = message(REPLIES, 1, DAY, 0, text("a reply"));
-        td_message.sender_id = tdlib::enums::MessageSender::User(
-            tdlib::types::MessageSenderUser { user_id: REPLIES },
-        );
+        td_message.sender_id =
+            tdlib::enums::MessageSender::User(tdlib::types::MessageSenderUser { user_id: REPLIES });
         td_message.is_outgoing = false;
         td_message.forward_info = forwarded_from(42);
         let reply = model::Message::new(&replies, td_message);

@@ -1,4 +1,5 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use glib::clone;
@@ -246,7 +247,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageLabel(ObjectSubclass<imp::MessageLabel>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl MessageLabel {

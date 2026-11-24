@@ -123,7 +123,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct Sticker(ObjectSubclass<imp::Sticker>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Sticker {
@@ -423,7 +424,10 @@ pub(crate) fn gtk_check() {
             session.clone(),
         );
         iterate_until(&|| widget.first_child().is_some());
-        assert!(widget.first_child().and_downcast::<WebmAnimation>().is_some());
+        assert!(widget
+            .first_child()
+            .and_downcast::<WebmAnimation>()
+            .is_some());
 
         // A sticker that is not downloaded yet waits until it is shown
         // (78359245): nothing is requested while the widget is not mapped.

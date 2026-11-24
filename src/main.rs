@@ -41,7 +41,7 @@ fn main() -> glib::ExitCode {
             // Print version ...
             println!("paper-plane {}", config::VERSION);
             // ... and exit application.
-            1
+            std::ops::ControlFlow::Break(glib::ExitCode::from(1))
         } else {
             adw::init().expect("Failed to init GTK/libadwaita");
             ui::init();
@@ -90,13 +90,13 @@ fn main() -> glib::ExitCode {
                 (None, None) => (),
                 _ => {
                     log::error!("Both client-id and client-secret must be set together");
-                    return 1;
+                    return std::ops::ControlFlow::Break(glib::ExitCode::from(1));
                 }
             };
 
             APPLICATION_OPTS.set(application_opts).unwrap();
 
-            -1
+            std::ops::ControlFlow::Continue(())
         }
     });
 
@@ -121,7 +121,7 @@ fn main() -> glib::ExitCode {
     // persisted at this point (tdlib writes its database incrementally),
     // so terminate the process without running any destructors.
     drop(temp_dir);
-    unsafe { libc::_exit(exit_code.value()) }
+    unsafe { libc::_exit(exit_code.get().into()) }
 }
 
 /// Global options for the application

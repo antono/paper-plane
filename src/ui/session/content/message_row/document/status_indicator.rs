@@ -7,6 +7,7 @@ use gtk::subclass::prelude::*;
 use gtk::CompositeTemplate;
 
 use super::FileStatus;
+use crate::ui;
 
 mod imp {
     use super::*;
@@ -22,7 +23,7 @@ mod imp {
         #[template_child]
         pub(super) status_image: TemplateChild<gtk::Image>,
         #[template_child]
-        pub(super) loading_indicator: TemplateChild<ori::LoadingIndicator>,
+        pub(super) loading_indicator: TemplateChild<ui::LoadingIndicator>,
     }
 
     #[glib::object_subclass]
@@ -100,7 +101,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct StatusIndicator(ObjectSubclass<imp::StatusIndicator>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl StatusIndicator {

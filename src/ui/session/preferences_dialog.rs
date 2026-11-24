@@ -130,7 +130,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct PreferencesDialog(ObjectSubclass<imp::PreferencesDialog>)
-        @extends gtk::Widget, adw::Dialog, adw::PreferencesDialog;
+        @extends gtk::Widget, adw::Dialog, adw::PreferencesDialog,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl From<&ui::Session> for PreferencesDialog {

@@ -229,7 +229,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageReactions(ObjectSubclass<imp::MessageReactions>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl MessageReactions {

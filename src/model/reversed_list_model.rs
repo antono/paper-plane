@@ -23,9 +23,7 @@ mod imp {
 
     impl ObjectImpl for ReversedListModel {
         fn dispose(&self) {
-            if let (Some(model), Some(handler)) =
-                (self.model.take(), self.handler.take())
-            {
+            if let (Some(model), Some(handler)) = (self.model.take(), self.handler.take()) {
                 model.disconnect(handler);
             }
         }
@@ -112,8 +110,10 @@ mod tests {
     }
 
     fn splice(store: &gio::ListStore, position: u32, removed: u32, items: &[&'static str]) {
-        let items: Vec<glib::BoxedAnyObject> =
-            items.iter().map(|s| glib::BoxedAnyObject::new(*s)).collect();
+        let items: Vec<glib::BoxedAnyObject> = items
+            .iter()
+            .map(|s| glib::BoxedAnyObject::new(*s))
+            .collect();
         store.splice(position, removed, &items);
     }
 

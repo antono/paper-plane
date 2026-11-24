@@ -138,7 +138,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageVoiceNote(ObjectSubclass<imp::MessageVoiceNote>)
-        @extends gtk::Widget, ui::MessageBase;
+        @extends gtk::Widget, ui::MessageBase,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl MessageBaseExt for MessageVoiceNote {

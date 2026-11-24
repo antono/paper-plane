@@ -869,8 +869,7 @@ mod tests {
         isolated(|| {
             let session = session();
             let chat = add_chat(&session, ME);
-            let message =
-                model::Message::new(&chat, message(ME, 1, DAY, 0, live_location(900)));
+            let message = model::Message::new(&chat, message(ME, 1, DAY, 0, live_location(900)));
             assert_eq!(message_content(&message), gettext("Live Location"));
         });
     }

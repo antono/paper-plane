@@ -1,0 +1,13 @@
+[package]
+name = "gtk-rlottie"
+version = "0.10.0"
+edition = "2021"
+description = "GTK widget that renders Lottie animations and Telegram stickers using rlottie"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+async-channel = "2"
+flate2 = "1"
+gtk = { version = "0.10", package = "gtk4" }
+rlottie = "0.5"

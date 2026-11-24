@@ -459,7 +459,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct WebmAnimation(ObjectSubclass<imp::WebmAnimation>)
-        @extends gtk::Widget, adw::Bin;
+        @extends gtk::Widget, adw::Bin,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl WebmAnimation {

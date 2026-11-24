@@ -201,7 +201,7 @@ fn layout_children(widget: &gtk::Widget) -> Vec<(gtk::Widget, PhysicalSize)> {
         child = c.next_sibling();
 
         if c.should_layout() {
-            let ratio = if c.has_property("aspect-ratio", Some(f64::static_type())) {
+            let ratio = if c.has_property_with_type("aspect-ratio", f64::static_type()) {
                 c.property_value("aspect-ratio").get::<f64>().unwrap_or(1.0)
             } else {
                 1.0

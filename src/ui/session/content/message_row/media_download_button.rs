@@ -4,6 +4,7 @@ use gtk::subclass::prelude::*;
 use gtk::CompositeTemplate;
 
 use super::file_status::FileStatus;
+use crate::ui;
 
 mod imp {
     use super::*;
@@ -16,7 +17,7 @@ mod imp {
         #[template_child]
         pub(super) download_image: TemplateChild<gtk::Image>,
         #[template_child]
-        pub(super) loading_indicator: TemplateChild<ori::LoadingIndicator>,
+        pub(super) loading_indicator: TemplateChild<ui::LoadingIndicator>,
     }
 
     #[glib::object_subclass]
@@ -46,7 +47,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MediaDownloadButton(ObjectSubclass<imp::MediaDownloadButton>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Default for MediaDownloadButton {

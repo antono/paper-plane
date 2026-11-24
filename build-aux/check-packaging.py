@@ -131,7 +131,9 @@ def _():
         return version_tuple(m.group(1)) if m else None
 
     # What the features of gtk4-rs and libadwaita-rs need (their Cargo.toml).
-    gnome = {"gnome_47": {"gtk4": "4.16", "gio-2.0": "2.82", "glib-2.0": "2.82"},
+    gnome = {"gnome_49": {"gtk4": "4.20", "gio-2.0": "2.86", "glib-2.0": "2.86"},
+             "gnome_48": {"gtk4": "4.18", "gio-2.0": "2.84", "glib-2.0": "2.84"},
+             "gnome_47": {"gtk4": "4.16", "gio-2.0": "2.82", "glib-2.0": "2.82"},
              "gnome_46": {"gtk4": "4.14", "gio-2.0": "2.80", "glib-2.0": "2.80"},
              "gnome_45": {"gtk4": "4.12", "gio-2.0": "2.78", "glib-2.0": "2.78"}}
     needed = {}

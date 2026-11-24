@@ -83,7 +83,7 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct Row(ObjectSubclass<imp::Row>)
-        @extends gtk::Widget, @implements gtk::Accessible;
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Row {
@@ -113,7 +113,9 @@ impl Row {
             dialog.set_response_appearance("log-out", adw::ResponseAppearance::Destructive);
 
             if dialog
-                .choose_future(self.root().unwrap().downcast_ref::<gtk::Window>().unwrap())
+                .choose_future(Some(
+                    self.root().unwrap().downcast_ref::<gtk::Window>().unwrap(),
+                ))
                 .await
                 == "log-out"
             {

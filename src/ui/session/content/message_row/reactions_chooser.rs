@@ -60,7 +60,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct ReactionsChooser(ObjectSubclass<imp::ReactionsChooser>)
-        @extends gtk::Popover, gtk::Widget;
+        @extends gtk::Popover, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Native, gtk::ShortcutManager;
 }
 
 impl ReactionsChooser {

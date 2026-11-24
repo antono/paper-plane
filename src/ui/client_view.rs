@@ -117,6 +117,11 @@ pub(crate) fn gtk_check() {
             .state()
             .and_downcast::<model::ClientStateLoggingOut>()
             .is_some());
-        assert!(view.imp().bin.child().and_downcast::<adw::Spinner>().is_some());
+        assert!(view
+            .imp()
+            .bin
+            .child()
+            .and_downcast::<adw::Spinner>()
+            .is_some());
     });
 }

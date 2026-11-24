@@ -111,7 +111,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageLocation(ObjectSubclass<imp::MessageLocation>)
-        @extends gtk::Widget, ui::MessageBase;
+        @extends gtk::Widget, ui::MessageBase,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl MessageBaseExt for MessageLocation {
@@ -184,8 +185,7 @@ impl MessageLocation {
                 ));
 
                 let message_date = message.date();
-                if let Some(last_update_date) = self.update_time(message_date, live_period)
-                {
+                if let Some(last_update_date) = self.update_time(message_date, live_period) {
                     imp.last_updated_label
                         .set_label(&gettext("updated just now"));
 

@@ -199,7 +199,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MediaViewerPage(ObjectSubclass<imp::MediaViewerPage>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 /// The zoom of a double click or tap.

@@ -180,7 +180,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageEntry(ObjectSubclass<imp::MessageEntry>)
-        @extends gtk::Widget;
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl MessageEntry {

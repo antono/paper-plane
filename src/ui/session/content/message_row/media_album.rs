@@ -91,7 +91,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct MessageMediaAlbum(ObjectSubclass<imp::MessageMediaAlbum>)
-        @extends gtk::Widget, ui::MessageBase;
+        @extends gtk::Widget, ui::MessageBase,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 /// Displays a media album as a grid of tiles inside a message bubble.

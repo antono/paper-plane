@@ -13,15 +13,14 @@ use gtk::gio;
 use gtk::glib;
 use gtk::CompositeTemplate;
 
+use super::message_selection;
+use super::message_selection::MessageSelection;
 use crate::expressions;
 use crate::i18n::gettext_f;
 use crate::i18n::ngettext_f;
 use crate::model;
 use crate::ui;
 use crate::utils;
-
-use super::message_selection;
-use super::message_selection::MessageSelection;
 
 /// The number of messages requested when the viewport is first filled with
 /// messages. If it is not enough, smaller chunks are requested until it is.
@@ -352,7 +351,8 @@ mod imp {
 
 glib::wrapper! {
     pub(crate) struct ChatHistory(ObjectSubclass<imp::ChatHistory>)
-        @extends gtk::Widget, adw::Bin;
+        @extends gtk::Widget, adw::Bin,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Default for ChatHistory {
@@ -625,7 +625,7 @@ impl ChatHistory {
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
 
-        let response = dialog.choose_future(&window).await;
+        let response = dialog.choose_future(Some(&window)).await;
         self.delete_after_response(&response, &ids);
     }
 
@@ -689,7 +689,11 @@ impl ChatHistory {
             dialog.set_close_response("no");
             dialog.set_response_appearance("yes", adw::ResponseAppearance::Destructive);
 
-            if dialog.choose_future(&self.parent_window().unwrap()).await == "yes" {
+            if dialog
+                .choose_future(Some(&self.parent_window().unwrap()))
+                .await
+                == "yes"
+            {
                 match tdlib::functions::leave_chat(chat.id(), chat.session_().client_().id()).await
                 {
                     Ok(_) => {
