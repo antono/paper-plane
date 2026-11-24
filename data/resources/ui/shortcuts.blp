@@ -39,8 +39,57 @@ Adw.ShortcutsDialog shortcuts_dialog {
     title: C_("shortcut window", "Chat History");
 
     Adw.ShortcutsItem {
+      title: C_("shortcut window", "Send Message");
+      accelerator: "Return";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "New Line");
+      accelerator: "<shift>Return";
+    }
+
+    Adw.ShortcutsItem {
       title: C_("shortcut window", "Send Photo from Clipboard");
       accelerator: "<ctrl>v";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Leave Message Selection");
+      accelerator: "Escape";
+    }
+  }
+
+  Adw.ShortcutsSection {
+    title: C_("shortcut window", "Media Viewer");
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Previous");
+      accelerator: "Left";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Next");
+      accelerator: "Right";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Zoom In");
+      accelerator: "<ctrl>plus";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Zoom Out");
+      accelerator: "<ctrl>minus";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Original Size");
+      accelerator: "<ctrl>0";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Close");
+      accelerator: "Escape";
     }
   }
 }
