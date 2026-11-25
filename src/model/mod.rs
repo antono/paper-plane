@@ -57,6 +57,7 @@ pub(crate) use self::avatar::Avatar;
 pub(crate) use self::basic_group::BasicGroup;
 pub(crate) use self::chat::Chat;
 pub(crate) use self::chat::ChatType;
+pub(crate) use self::chat::FilteredSearchPage;
 pub(crate) use self::chat::MediaSearchPage;
 pub(crate) use self::chat_action::ChatAction;
 pub(crate) use self::chat_action_list::ChatActionList;

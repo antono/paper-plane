@@ -231,6 +231,22 @@ impl Application {
                 None => log::warn!("auto-history-action: missing parameters"),
             },
         );
+        self.add_auto_action(
+            "auto-window-size",
+            Some(glib::VariantTy::new("(ii)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(i32, i32)>()) {
+                Some((width, height)) => app.auto_window_size(width, height),
+                None => log::warn!("auto-window-size: missing parameters"),
+            },
+        );
+        self.add_auto_action(
+            "auto-info-activate",
+            Some(glib::VariantTy::new("(si)").unwrap()),
+            |app, p| match p.and_then(|p| p.get::<(String, i32)>()) {
+                Some((page, index)) => app.auto_info_activate(&page, index),
+                None => log::warn!("auto-info-activate: missing parameters"),
+            },
+        );
         self.add_auto_action("auto-copy-selected", None, |app, _| {
             app.auto_copy_selected()
         });
@@ -304,6 +320,31 @@ impl Application {
     }
 
     /// The main window, also while it is hidden (running in the background).
+    /// Resizes the window, e.g. to the size of a phone to check the
+    /// adaptive layouts.
+    fn auto_window_size(&self, width: i32, height: i32) {
+        let Some(window) = self.auto_window() else {
+            log::warn!("auto-window-size: no window");
+            return;
+        };
+        window.set_default_size(width, height);
+    }
+
+    /// Activates the `index`th item of a tab (`media`, `files`, `links`,
+    /// `voice`, `music`) of the open chat info dialog, as a click does.
+    fn auto_info_activate(&self, page: &str, index: i32) {
+        let Some(dialog) = self
+            .auto_window()
+            .and_then(|w| descendant::<ui::ChatInfoWindow>(w.upcast_ref()))
+        else {
+            log::warn!("auto-info-activate: no chat info dialog");
+            return;
+        };
+        if !dialog.activate_shared_item(page, index) {
+            log::warn!("auto-info-activate: no item {index} in {page}");
+        }
+    }
+
     fn auto_window(&self) -> Option<ui::Window> {
         self.windows()
             .into_iter()
@@ -736,6 +777,11 @@ impl Application {
             return;
         };
         window.select_chat(client_id, chat_id);
+        // As a tap on the row of the chat does, which also shows the chat
+        // when the window is as narrow as a phone.
+        if let Some(split_view) = descendant::<adw::NavigationSplitView>(window.upcast_ref()) {
+            split_view.set_show_content(true);
+        }
     }
 
     /// Types `text` into the composer of the open chat and sends it.

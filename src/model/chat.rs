@@ -24,6 +24,16 @@ pub(crate) struct MediaSearchPage {
     pub(crate) next_from_message_id: MessageId,
 }
 
+/// A page of the messages of a chat matching a search filter, as returned by
+/// `Chat::search_filtered_messages`.
+pub(crate) struct FilteredSearchPage {
+    /// The matching messages, in reverse chronological order.
+    pub(crate) messages: Vec<model::Message>,
+    /// The id from which the next page must be requested, or `0` if there are
+    /// no more messages.
+    pub(crate) next_from_message_id: MessageId,
+}
+
 #[derive(Clone, Debug, glib::Boxed)]
 #[boxed_type(name = "ChatType")]
 pub(crate) enum ChatType {
@@ -696,6 +706,46 @@ impl Chat {
             .flatten()
             .map(|m| self.insert_message(m))
             .collect())
+    }
+
+    /// Searches for the messages of this chat matching the `filter`, e.g. the
+    /// files or the links shared in it, in reverse chronological order,
+    /// starting from the message with the id `from_id` (inclusive), or from
+    /// the last message if `from_id` is 0.
+    ///
+    /// See `searchChatMessages` in the TDLib documentation for more details.
+    pub(crate) async fn search_filtered_messages(
+        &self,
+        filter: tdlib::enums::SearchMessagesFilter,
+        from_id: MessageId,
+        limit: i32,
+    ) -> Result<FilteredSearchPage, tdlib::types::Error> {
+        let client_id = self.client_id()?;
+        let result = tdlib::functions::search_chat_messages(
+            self.id(),
+            None,
+            String::new(),
+            None,
+            from_id,
+            0,
+            limit,
+            Some(filter),
+            client_id,
+        )
+        .await;
+        // The session may have gone while waiting for the answer.
+        self.client_id()?;
+
+        let tdlib::enums::FoundChatMessages::FoundChatMessages(data) = result?;
+
+        Ok(FilteredSearchPage {
+            next_from_message_id: data.next_from_message_id,
+            messages: data
+                .messages
+                .into_iter()
+                .map(|m| self.insert_message(m))
+                .collect(),
+        })
     }
 
     /// Searches for the photo and video messages of this chat, in reverse

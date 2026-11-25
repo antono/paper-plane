@@ -83,6 +83,8 @@ impl Engine {
                 text: format!("Message {n}"),
                 ago: oldest_ago + 60 * (chat.filler - n + 1) as i32,
                 photo: false,
+                document: None,
+                voice: None,
                 reply_to: None,
                 reactions: vec![],
             });
@@ -114,6 +116,14 @@ impl Engine {
                             PHOTO.len() as i64,
                             &m.text,
                         );
+                    }
+                    let file_id = scenario::photo_file_id(chat.with.id, m.id);
+                    if let Some(name) = &m.document {
+                        message.content = scenario::document_content(file_id, name, &m.text);
+                    } else if let Some(duration) = m.voice {
+                        message.content = scenario::voice_note_content(file_id, duration, &m.text);
+                    } else if let enums::MessageContent::MessageText(data) = &mut message.content {
+                        data.text.entities = scenario::url_entities(&m.text);
                     }
                     message.reply_to = m.reply_to.map(|id| scenario::reply_to(chat.with.id, id));
                     message.interaction_info = scenario::interaction_info(&m.reactions);
@@ -455,6 +465,41 @@ impl Engine {
                     enums::Messages::Messages(types::Messages {
                         total_count: messages.len() as i32,
                         messages: messages.into_iter().map(Some).collect(),
+                    }),
+                    extra,
+                );
+            }
+            // The newest first, from `from_message_id` (inclusive) on.
+            "searchChatMessages" => {
+                let chat_id = request["chat_id"].as_i64().unwrap_or_default();
+                let from = request["from_message_id"].as_i64().unwrap_or_default();
+                let limit = request["limit"].as_i64().unwrap_or(50).max(0) as usize;
+                let filter = request["filter"]["@type"].as_str().unwrap_or_default();
+                let matching: Vec<types::Message> = self
+                    .messages
+                    .get(&chat_id)
+                    .map(|messages| {
+                        messages
+                            .values()
+                            .rev()
+                            .filter(|m| from == 0 || m.id <= from)
+                            .filter(|m| scenario::matches_search_filter(m, filter))
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let page: Vec<types::Message> = matching.iter().take(limit).cloned().collect();
+                let next_from_message_id = if matching.len() > page.len() {
+                    page.last().map(|m| m.id - 1).unwrap_or_default()
+                } else {
+                    0
+                };
+                self.emit(
+                    client_id,
+                    enums::FoundChatMessages::FoundChatMessages(types::FoundChatMessages {
+                        total_count: matching.len() as i32,
+                        messages: page,
+                        next_from_message_id,
                     }),
                     extra,
                 );

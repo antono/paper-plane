@@ -1,0 +1,94 @@
+{
+  "auth": "ready",
+  "me": {
+    "id": 137,
+    "name": "Test User"
+  },
+  "chats": [
+    {
+      "with": {
+        "id": 1006,
+        "name": "Frank Example"
+      },
+      "filler": 120,
+      "messages": [
+        {
+          "id": 121,
+          "photo": true,
+          "text": "Beach",
+          "ago": 3000
+        },
+        {
+          "id": 122,
+          "photo": true,
+          "text": "",
+          "ago": 2940
+        },
+        {
+          "id": 123,
+          "document": "report-137.pdf",
+          "text": "The report",
+          "ago": 2880
+        },
+        {
+          "id": 124,
+          "text": "Read https://example.org/137 later",
+          "ago": 2820
+        },
+        {
+          "id": 125,
+          "voice": 37,
+          "text": "",
+          "ago": 2760
+        },
+        {
+          "id": 126,
+          "photo": true,
+          "text": "",
+          "ago": 2700
+        },
+        {
+          "id": 127,
+          "document": "slides.odp",
+          "text": "",
+          "ago": 2640
+        },
+        {
+          "id": 128,
+          "text": "See https://gnome.org for more",
+          "ago": 2580
+        },
+        {
+          "id": 129,
+          "photo": true,
+          "text": "",
+          "ago": 2520
+        },
+        {
+          "id": 130,
+          "voice": 5,
+          "outgoing": true,
+          "text": "",
+          "ago": 2460
+        },
+        {
+          "id": 131,
+          "photo": true,
+          "text": "",
+          "ago": 2400
+        },
+        {
+          "id": 132,
+          "photo": true,
+          "text": "",
+          "ago": 2340
+        },
+        {
+          "id": 133,
+          "text": "The newest message from Frank",
+          "ago": 2280
+        }
+      ]
+    }
+  ]
+}

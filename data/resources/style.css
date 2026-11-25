@@ -702,17 +702,43 @@ contactrow {
   margin: 6px 0;
 }
 
-window.chat-info .main-page {
+.chat-info .main-page {
   margin: 12px;
   border-spacing: 6px;
 }
 
-window.chat-info .main-page > avatar {
+.chat-info .main-page > avatar {
   margin-bottom: 6px;
 }
 
-window.chat-info .main-page > list {
+.chat-info .main-page > list {
   margin-top: 12px;
+}
+
+.chat-info .shared-media {
+  margin-top: 18px;
+  border-spacing: 12px;
+}
+
+.chat-info .shared-media-grid > flowboxchild {
+  padding: 0;
+}
+
+shared-media-tile {
+  border-radius: 6px;
+  background-color: alpha(currentColor, 0.08);
+}
+
+shared-media-tile .duration {
+  margin: 4px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: smaller;
+  font-feature-settings: "tnum";
+}
+
+.chat-info .shared-media-icon {
+  opacity: 0.7;
 }
 
 .small-pill {

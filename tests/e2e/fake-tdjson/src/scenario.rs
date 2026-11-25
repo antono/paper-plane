@@ -84,6 +84,12 @@ pub struct MessageSpec {
     /// A photo (with `text` as its caption), downloaded from the fake.
     #[serde(default)]
     pub photo: bool,
+    /// A file with this name (with `text` as its caption).
+    #[serde(default)]
+    pub document: Option<String>,
+    /// A voice note of this many seconds (with `text` as its caption).
+    #[serde(default)]
+    pub voice: Option<i32>,
     /// The message of the same chat that this one replies to.
     #[serde(default)]
     pub reply_to: Option<i64>,
@@ -545,5 +551,62 @@ pub fn available_reactions() -> types::AvailableReactions {
         allow_custom_emoji: false,
         are_tags: false,
         unavailability_reason: None,
+    }
+}
+
+pub fn voice_note_content(file_id: i32, duration: i32, caption: &str) -> enums::MessageContent {
+    enums::MessageContent::MessageVoiceNote(types::MessageVoiceNote {
+        voice_note: types::VoiceNote {
+            duration,
+            waveform: String::new(),
+            mime_type: "audio/ogg".to_owned(),
+            speech_recognition_result: None,
+            voice: file(file_id, None, 1000),
+        },
+        caption: types::FormattedText {
+            text: caption.to_owned(),
+            entities: vec![],
+        },
+        is_listened: true,
+    })
+}
+
+/// The URL entities of a text, as TDLib finds them: every word starting with
+/// `http://` or `https://`, with UTF-16 offsets.
+pub fn url_entities(text: &str) -> Vec<types::TextEntity> {
+    let mut entities = vec![];
+    let mut offset = 0;
+    for word in text.split(' ') {
+        let length = word.encode_utf16().count() as i32;
+        if word.starts_with("http://") || word.starts_with("https://") {
+            entities.push(types::TextEntity {
+                offset,
+                length,
+                r#type: enums::TextEntityType::Url,
+            });
+        }
+        offset += length + 1;
+    }
+    entities
+}
+
+/// Whether a message matches a `SearchMessagesFilter` of `searchChatMessages`.
+pub fn matches_search_filter(message: &types::Message, filter: &str) -> bool {
+    use enums::MessageContent as C;
+
+    match filter {
+        "searchMessagesFilterPhotoAndVideo" => {
+            matches!(message.content, C::MessagePhoto(_) | C::MessageVideo(_))
+        }
+        "searchMessagesFilterPhoto" => matches!(message.content, C::MessagePhoto(_)),
+        "searchMessagesFilterDocument" => matches!(message.content, C::MessageDocument(_)),
+        "searchMessagesFilterVoiceNote" => matches!(message.content, C::MessageVoiceNote(_)),
+        "searchMessagesFilterAudio" => matches!(message.content, C::MessageAudio(_)),
+        "searchMessagesFilterUrl" => match &message.content {
+            C::MessageText(data) => !data.text.entities.is_empty() || data.link_preview.is_some(),
+            _ => false,
+        },
+        "" | "searchMessagesFilterEmpty" => true,
+        _ => false,
     }
 }

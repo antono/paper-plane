@@ -15,7 +15,9 @@
                     <child>
                       <object class="AdwHeaderBar">
                         <child type="title">
-                          <object class="GtkBox">
+                          <object class="GtkBox" id="title_box">
+                            <!-- Clicking the title opens the profile, as in Telegram -->
+                            <property name="tooltip-text" translatable="yes">View Info</property>
                             <child>
                               <object class="GtkImage">
                                 <property name="visible" bind-source="PaplChatHistory"

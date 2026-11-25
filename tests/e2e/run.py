@@ -919,6 +919,70 @@ def test_selection_forward(app):
     app.assert_all_requests_supported()
 
 
+def test_profile_shared_media_jumps_to_the_message(app):
+    """The profile lists the shared media, files, links and voice messages of
+    the chat in tabs, also at the width of a phone, and activating one shows
+    it in the chat history."""
+    app.wait_until_logged_in()
+    app.open_chat(1006)
+    app.wait_for(
+        "the history of Frank's chat",
+        lambda: (r := history_ids(app, 1006)) and 133 in r[1] and r,
+    )
+
+    app.action("auto-history-action", "('view-info', int64 0)")
+    filters = app.wait_for(
+        "the shared media searches",
+        lambda: (
+            f := {r["request"]["filter"]["@type"] for r in app.requests("searchChatMessages")}
+        ) >= {
+            "searchMessagesFilterPhotoAndVideo",
+            "searchMessagesFilterDocument",
+            "searchMessagesFilterUrl",
+            "searchMessagesFilterVoiceNote",
+            "searchMessagesFilterAudio",
+        } and f,
+    )
+    assert filters, filters
+    # Let the tiles download their thumbnails before the screenshots.
+    time.sleep(1)
+    app.screenshot("profile-desktop")
+
+    # The newest photo is message 132.
+    app.action("auto-info-activate", "('media', 0)")
+    app.wait_for(
+        "the history anchored at the photo",
+        lambda: (r := history_ids(app, 1006)) and r[0]["history"][1] == "132" and 132 in r[1] and r,
+    )
+
+    # On a phone: the chat, then its profile, as a bottom sheet.
+    app.action("auto-window-size", "(360, 720)")
+    time.sleep(1)
+    app.open_chat(1006)
+    time.sleep(1)
+    app.action("auto-history-action", "('view-info', int64 0)")
+    time.sleep(1.5)
+    app.screenshot("profile-phone")
+    # Index -1 only shows the tab.
+    app.action("auto-info-activate", "('files', -1)")
+    time.sleep(0.5)
+    app.screenshot("profile-phone-files")
+
+    # The newest file is the slides, message 127.
+    app.action("auto-info-activate", "('files', 0)")
+    app.wait_for(
+        "the history anchored at the file",
+        lambda: (r := history_ids(app, 1006)) and r[0]["history"][1] == "127" and 127 in r[1] and r,
+    )
+    time.sleep(1)
+    app.screenshot("profile-phone-jumped")
+    # The file is in view, not pushed out by the photos below it.
+    state = app.state()
+    assert not at_bottom(state), f"the history is at the bottom: {state['scroll']}"
+    app.quit()
+    app.assert_all_requests_supported()
+
+
 TESTS = [
     ("chat-list-open-and-send", "two-chats.json", test_chat_list_open_and_send),
     ("login-with-phone-number", "login.json", test_login_with_phone_number),
@@ -939,6 +1003,7 @@ TESTS = [
     ("selection-copy-and-reply", "selection.json", test_selection_copy_and_reply),
     ("selection-delete", "selection.json", test_selection_delete),
     ("selection-forward", "selection.json", test_selection_forward),
+    ("profile-shared-media-jumps-to-the-message", "shared-media.json", test_profile_shared_media_jumps_to_the_message),
 ]
 
 

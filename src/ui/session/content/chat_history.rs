@@ -68,6 +68,8 @@ mod imp {
         #[template_child]
         pub(super) window_title: TemplateChild<adw::WindowTitle>,
         #[template_child]
+        pub(super) title_box: TemplateChild<gtk::Box>,
+        #[template_child]
         pub(super) background: TemplateChild<ui::Background>,
         #[template_child]
         pub(super) scrolled_window: TemplateChild<gtk::ScrolledWindow>,
@@ -213,6 +215,20 @@ mod imp {
             let obj = self.obj();
 
             obj.setup_expressions();
+
+            // Clicking or tapping the title opens the profile, as in Telegram.
+            // On phones the menu is otherwise the only way to it.
+            self.title_box.set_cursor_from_name(Some("pointer"));
+            let title_click = gtk::GestureClick::new();
+            title_click.connect_released(clone!(
+                #[weak]
+                obj,
+                move |gesture, _, _, _| {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    obj.open_info_dialog();
+                }
+            ));
+            self.title_box.add_controller(title_click);
 
             // Without a selection the actions are disabled, so that the
             // Escape shortcut is not consumed and falls through.
@@ -675,7 +691,19 @@ impl ChatHistory {
 
     fn open_info_dialog(&self) {
         if let Some(chat) = self.chat() {
-            ui::ChatInfoWindow::new(&self.parent_window(), &chat).present();
+            let dialog = ui::ChatInfoWindow::new(&chat);
+            // A shared media, file or link activated in the profile is shown
+            // in the history, as long as this chat is still the open one.
+            dialog.connect_jump_to_message(clone!(
+                #[weak(rename_to = obj)]
+                self,
+                move |dialog, message_id| {
+                    if obj.chat().as_ref() == dialog.chat() {
+                        obj.jump_to_message(message_id);
+                    }
+                }
+            ));
+            dialog.present(Some(self));
         }
     }
 
@@ -954,6 +982,23 @@ impl ChatHistory {
 
         imp.list_view
             .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+
+        // The rows are measured with estimated heights first. Once photos
+        // and other media have their real height, the rows above the anchor
+        // grow and push it out of view, so it is scrolled to again after
+        // the layout settled.
+        for delay in [50, 200] {
+            glib::timeout_future(std::time::Duration::from_millis(delay)).await;
+            let Some(current) = imp.model.borrow().as_ref().cloned() else {
+                return;
+            };
+            if &current != model || imp.list_view.model().map_or(0, |m| m.n_items()) != n_items {
+                // Another history was set, or messages were added meanwhile.
+                return;
+            }
+            imp.list_view
+                .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        }
     }
 
     /// Installs the chat history model in the list view and fills it
