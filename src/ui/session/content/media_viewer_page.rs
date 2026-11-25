@@ -9,6 +9,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 use super::super::playback_manager;
+use super::super::player_stream::PlayerStream;
 use super::media_viewer::ViewerItem;
 use super::message_row::FileStatus;
 use super::message_row::MediaDownloadButton;
@@ -372,7 +373,7 @@ impl MediaViewerPage {
             clone!(
                 #[weak(rename_to = page)]
                 self,
-                move |media: &gtk::MediaFile| {
+                move |media: &PlayerStream| {
                     let imp = page.imp();
 
                     if !imp.displayed.get() || imp.generation.get() != generation {
@@ -739,7 +740,7 @@ pub(crate) fn gtk_check() {
             is_animation,
         };
         let manager = playback_manager::PlaybackManager::new();
-        let media = manager.media_file();
+        let media = manager.stream();
         let context = glib::MainContext::ref_thread_default();
         let wait_playing = || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

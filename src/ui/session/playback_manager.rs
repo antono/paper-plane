@@ -1,18 +1,21 @@
-//! A shared playback engine that owns a single `gtk::MediaFile` per session.
+//! A shared playback engine that owns a single [`PlayerStream`] per session.
 //!
 //! Widgets that play media (the media viewer and the voice note rows)
 //! borrow the stream of this manager instead of creating
 //! their own, so that at most one media pipeline exists per session.
 //!
-//! The `MediaFile` is exposed to the clients for read-only inspection
-//! (`is_playing()`, `position()`, `duration()`) and for binding it to
-//! render targets like `gtk::Video` or `gtk::MediaControls`, as well as
-//! for pre-load configuration (`set_muted()`, `set_loop()`). Its source
-//! and lifecycle, however, are owned by the manager: clients must not
-//! call `set_file()`, `set_filename()`, `clear()`, `play()`, `pause()`
-//! or connect their own `prepared`/`error` handlers. Playback control
-//! goes through the methods of the manager, and the per-playback hooks
-//! passed to `play_file` replace signal handlers.
+//! The stream is exposed to the clients for read-only inspection
+//! (`is_playing()`, `timestamp()`, `duration()`) and for binding it to
+//! render targets like `gtk::Video` or `gtk::MediaControls`, as well as for
+//! configuring the prepared stream (`set_muted()`, `set_loop()`, `play()`).
+//! Its source and lifecycle, however, are owned by the manager: clients must
+//! not call `load()` or `unload()` or connect their own `prepared`/`error`
+//! handlers. The per-playback hooks passed to `play_file` replace signal
+//! handlers.
+//!
+//! None of the methods of the manager wait for the pipeline: loading and
+//! stopping a source happen on the worker thread of the stream, see
+//! [`PlayerStream`].
 //!
 //! A voice note marks its playback with `set_audio_message`, so that the
 //! player bar shows it. Widgets that follow the playback (the voice note
@@ -27,19 +30,20 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 
+use super::player_stream::PlayerStream;
 use crate::model;
 
 /// The hook that is called when the stream of the current playback is
 /// prepared.
-type OnPrepared = Box<dyn Fn(&gtk::MediaFile)>;
+type OnPrepared = Box<dyn Fn(&PlayerStream)>;
 
 /// A handler of `PlaybackManager::connect_changed`.
 type ChangedHandler = Rc<dyn Fn()>;
 
 struct Inner {
-    /// The shared media stream. Created empty; its source is set by
-    /// `play_file`, so no pipeline exists while nothing plays.
-    media_file: gtk::MediaFile,
+    /// The shared media stream. Created empty; its pipeline is created by
+    /// the first `play_file`.
+    stream: PlayerStream,
     /// The path of the currently loaded source, if any.
     current_path: RefCell<Option<glib::GString>>,
     /// Resets the UI of the widget that owns the current playback. Run
@@ -98,10 +102,10 @@ impl Default for PlaybackManager {
 
 impl PlaybackManager {
     pub(crate) fn new() -> Self {
-        let media_file = gtk::MediaFile::new();
+        let stream = PlayerStream::new();
 
         let inner = Rc::new(Inner {
-            media_file: media_file.clone(),
+            stream: stream.clone(),
             current_path: RefCell::new(None),
             on_reset_previous: RefCell::new(None),
             on_prepared: RefCell::new(None),
@@ -111,27 +115,28 @@ impl PlaybackManager {
             next_handler_id: Cell::new(0),
         });
 
-        media_file.connect_notify_local(
+        stream.connect_notify_local(
             Some("prepared"),
             glib::clone!(
                 #[strong]
                 inner,
-                move |media: &gtk::MediaFile, _| {
-                    let on_prepared = inner.on_prepared.borrow();
-                    if media.is_prepared() {
-                        if let Some(on_prepared) = on_prepared.as_ref() {
-                            on_prepared(media);
-                        }
+                move |stream: &PlayerStream, _| {
+                    // A failed stream is prepared as well, see `on_error`.
+                    if !stream.is_prepared() || stream.error().is_some() {
+                        return;
+                    }
+                    if let Some(on_prepared) = inner.on_prepared.borrow().as_ref() {
+                        on_prepared(stream);
                     }
                 }
             ),
         );
-        media_file.connect_notify_local(
+        stream.connect_notify_local(
             Some("error"),
             glib::clone!(
                 #[strong]
                 inner,
-                move |media: &gtk::MediaFile, _| {
+                move |media: &PlayerStream, _| {
                     if let Some(error) = media.error() {
                         log::warn!("Media playback failed: {error:?}");
 
@@ -147,12 +152,12 @@ impl PlaybackManager {
 
         // A voice note that played to its end is done: the bar is hidden and
         // its row shows its play button again.
-        media_file.connect_notify_local(
+        stream.connect_notify_local(
             Some("ended"),
             glib::clone!(
                 #[weak(rename_to = inner)]
                 manager.0,
-                move |media: &gtk::MediaFile, _| {
+                move |media: &PlayerStream, _| {
                     if media.is_ended() && inner.audio_message.borrow().is_some() {
                         // Not within the notification of the stream.
                         let path = inner.current_path.borrow().clone();
@@ -163,7 +168,7 @@ impl PlaybackManager {
                                 let manager = PlaybackManager(inner);
                                 let still_current =
                                     path.as_deref().is_some_and(|p| manager.is_current(p));
-                                if still_current && manager.media_file().is_ended() {
+                                if still_current && manager.stream().is_ended() {
                                     manager.stop();
                                 }
                             }
@@ -193,7 +198,7 @@ impl PlaybackManager {
     /// is played, the playback is stopped or its voice note is set.
     ///
     /// The state of the stream itself (playing, position) is notified by
-    /// the stream, see `media_file()`.
+    /// the stream, see `stream()`.
     pub(crate) fn connect_changed<F: Fn() + 'static>(&self, f: F) -> ChangedHandlerId {
         let id = self.0.next_handler_id.get();
         self.0.next_handler_id.set(id + 1);
@@ -208,11 +213,10 @@ impl PlaybackManager {
             .retain(|(handler_id, _)| *handler_id != id.0);
     }
 
-    /// The shared media stream, for inspection, binding it to a render
-    /// target and pre-load configuration. See the module docs for what
-    /// clients must not do with it.
-    pub(crate) fn media_file(&self) -> gtk::MediaFile {
-        self.0.media_file.clone()
+    /// The shared media stream, for inspection and binding it to a render
+    /// target. See the module docs for what clients must not do with it.
+    pub(crate) fn stream(&self) -> PlayerStream {
+        self.0.stream.clone()
     }
 
     /// Whether the stream is currently loaded from `path`.
@@ -227,19 +231,13 @@ impl PlaybackManager {
     /// Plays the file at `path`, taking the stream over from the previous
     /// playback.
     ///
-    /// Before calling this method, the stream may be configured via
-    /// `media_file()` (e.g. `set_muted` / `set_loop`), which applies to
-    /// the upcoming source.
-    ///
     /// The previous playback is stopped: its reset callback is run and
     /// its handlers are disconnected, so that the widget that owned it
     /// can restore its UI.
     ///
     /// `on_prepared` is called when the stream is prepared and its first
     /// frame is available; the playback is *not* started automatically,
-    /// the hook decides what to do with the prepared stream. If the
-    /// stream is already prepared (e.g. the same source is reattached),
-    /// it is called directly, since `notify::prepared` won't fire again.
+    /// the hook decides what to do with the prepared stream.
     ///
     /// `on_error` is called if the playback fails. Note that it can also
     /// be called while another widget owns the stream, so it must not
@@ -247,7 +245,7 @@ impl PlaybackManager {
     pub(crate) fn play_file<R, P, E>(&self, path: &str, on_reset: R, on_prepared: P, on_error: E)
     where
         R: Fn() + 'static,
-        P: Fn(&gtk::MediaFile) + 'static,
+        P: Fn(&PlayerStream) + 'static,
         E: Fn() + 'static,
     {
         if let Some(on_reset_previous) = self.0.on_reset_previous.take() {
@@ -259,28 +257,14 @@ impl PlaybackManager {
         *self.0.current_path.borrow_mut() = Some(glib::GString::from(path));
         self.0.audio_message.replace(None);
 
-        let media = &self.0.media_file;
-        media.pause();
-        media.clear();
-        if media.is_prepared() {
-            media.stream_unprepared();
-        }
-        media.invalidate_contents();
-        media.set_filename(Some(path));
-
-        if media.is_prepared() {
-            let on_prepared = self.0.on_prepared.borrow();
-            if let Some(on_prepared) = on_prepared.as_ref() {
-                on_prepared(media);
-            }
-        }
+        self.0.stream.load(path);
 
         self.0.emit_changed();
     }
 
     /// Resumes or pauses the current playback.
     pub(crate) fn toggle_pause(&self) {
-        let media = &self.0.media_file;
+        let media = &self.0.stream;
         media.set_playing(!media.is_playing());
     }
 
@@ -288,10 +272,8 @@ impl PlaybackManager {
     /// resources of the underlying pipeline, and resets the UI of the
     /// widget that owned it.
     ///
-    /// Closing the stream is essential: merely pausing it would leave a
-    /// full media pipeline behind, whose teardown happens synchronously
-    /// on the main thread when the stream is eventually dropped. If such
-    /// a leftover pipeline got stuck, the whole UI would freeze.
+    /// The pipeline is stopped on the worker thread of the stream, so this
+    /// returns right away even if the pipeline is stuck.
     pub(crate) fn stop(&self) {
         if let Some(on_reset_previous) = self.0.on_reset_previous.take() {
             on_reset_previous();
@@ -302,12 +284,7 @@ impl PlaybackManager {
         let was_current = self.0.current_path.borrow_mut().take().is_some();
         self.0.audio_message.replace(None);
 
-        self.0.media_file.pause();
-        self.0.media_file.clear();
-        if self.0.media_file.is_prepared() {
-            self.0.media_file.stream_unprepared();
-        }
-        self.0.media_file.invalidate_contents();
+        self.0.stream.unload();
 
         if was_current {
             self.0.emit_changed();
@@ -406,24 +383,24 @@ pub(super) mod tests {
             iterate_until(|| prepared.get() > 0 || errors.get() > 0),
             "the stream was neither prepared nor failed"
         );
-        assert_eq!(errors.get(), 0, "{:?}", manager.media_file().error());
+        assert_eq!(errors.get(), 0, "{:?}", manager.stream().error());
 
         // The second playback takes the stream over and resets the first.
         play(second_str);
         assert_eq!(resets.get(), 1);
         assert!(manager.is_current(second_str));
         assert!(iterate_until(|| prepared.get() > 1 || errors.get() > 0));
-        assert_eq!(errors.get(), 0, "{:?}", manager.media_file().error());
+        assert_eq!(errors.get(), 0, "{:?}", manager.stream().error());
 
         manager.toggle_pause();
-        assert!(manager.media_file().is_playing());
+        assert!(manager.stream().is_playing());
         manager.toggle_pause();
-        assert!(!manager.media_file().is_playing());
+        assert!(!manager.stream().is_playing());
 
         manager.stop();
         assert_eq!(resets.get(), 2);
         assert!(!manager.is_current(second_str));
-        assert!(!manager.media_file().is_prepared());
+        assert!(!manager.stream().is_prepared());
 
         // Stopping again does not reset the UI twice.
         manager.stop();

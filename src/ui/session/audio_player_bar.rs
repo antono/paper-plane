@@ -17,6 +17,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 use super::playback_manager;
+use super::player_stream::PlayerStream;
 use crate::model;
 use crate::strings;
 use crate::ui;
@@ -227,7 +228,7 @@ impl AudioPlayerBar {
             return;
         };
         let imp = self.imp();
-        let media = manager.media_file();
+        let media = manager.stream();
 
         let ids = ["playing", "timestamp", "duration", "prepared", "ended"]
             .into_iter()
@@ -237,7 +238,7 @@ impl AudioPlayerBar {
                     clone!(
                         #[weak(rename_to = obj)]
                         self,
-                        move |_: &gtk::MediaFile, _| obj.sync(),
+                        move |_: &PlayerStream, _| obj.sync(),
                     ),
                 )
             })
@@ -261,7 +262,7 @@ impl AudioPlayerBar {
         let Some(manager) = imp.playback.take() else {
             return;
         };
-        let media = manager.media_file();
+        let media = manager.stream();
         for id in imp.stream_handler_ids.take() {
             media.disconnect(id);
         }
@@ -294,7 +295,7 @@ impl AudioPlayerBar {
         let Some(manager) = imp.playback.borrow().clone() else {
             return;
         };
-        let media = manager.media_file();
+        let media = manager.stream();
 
         self.set_visible(true);
         imp.revealer.set_reveal_child(true);
@@ -440,7 +441,7 @@ pub(crate) fn gtk_check() {
         assert!(imp.revealer.reveals_child());
 
         // Closing a stream that is still being prepared upsets GTK.
-        let media = manager.media_file();
+        let media = manager.stream();
         let context = glib::MainContext::ref_thread_default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !media.is_prepared()

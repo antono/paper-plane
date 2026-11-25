@@ -16,6 +16,7 @@ use crate::model;
 use crate::model::MediaType;
 use crate::ui;
 use crate::ui::session::playback_manager;
+use crate::ui::session::player_stream::PlayerStream;
 use crate::utils;
 
 mod imp {
@@ -292,7 +293,7 @@ impl MessageVoiceNote {
         manager.play_file(
             &path,
             || {},
-            |media: &gtk::MediaFile| {
+            |media: &PlayerStream| {
                 // Set on the prepared stream, see MediaViewerPage
                 media.set_muted(false);
                 media.set_loop(false);
@@ -316,7 +317,7 @@ impl MessageVoiceNote {
             return;
         };
         let imp = self.imp();
-        let media = manager.media_file();
+        let media = manager.stream();
 
         let ids = ["playing", "timestamp", "duration", "prepared", "ended"]
             .into_iter()
@@ -326,7 +327,7 @@ impl MessageVoiceNote {
                     clone!(
                         #[weak(rename_to = obj)]
                         self,
-                        move |_: &gtk::MediaFile, _| obj.sync_playback_ui(),
+                        move |_: &PlayerStream, _| obj.sync_playback_ui(),
                     ),
                 )
             })
@@ -351,7 +352,7 @@ impl MessageVoiceNote {
         let Some(manager) = imp.playback.take() else {
             return;
         };
-        let media = manager.media_file();
+        let media = manager.stream();
         for id in imp.stream_handler_ids.take() {
             media.disconnect(id);
         }
@@ -390,7 +391,7 @@ impl MessageVoiceNote {
             .clone()
             .or_else(|| self.playback_manager())
             .filter(|manager| self.is_played_by(manager))
-            .map(|manager| manager.media_file());
+            .map(|manager| manager.stream());
 
         let (playing, progress) = match current {
             Some(media) => {
@@ -509,7 +510,7 @@ pub(crate) fn gtk_check() {
         assert_eq!(icon(), "media-playback-pause-symbolic");
 
         // Once prepared it plays; a second click pauses it.
-        let media = manager.media_file();
+        let media = manager.stream();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !media.is_playing() && std::time::Instant::now() < deadline {
             context.iteration(false);

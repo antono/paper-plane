@@ -51,6 +51,7 @@
           gst_all_1.gst-plugins-good
           gst_all_1.gstreamer
           gtk4
+          libGL # egl.pc, for the GL video sink (gst-plugin-gtk4)
           libadwaita
           libshumate
           libvpx

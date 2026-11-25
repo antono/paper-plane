@@ -2,6 +2,7 @@ mod audio_player_bar;
 mod contacts_window;
 mod content;
 mod playback_manager;
+mod player_stream;
 mod preferences_dialog;
 mod row;
 mod sidebar;
@@ -292,6 +293,7 @@ impl Session {
 /// The checks of the session widgets that need GTK, see `ui::tests`.
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
+    player_stream::tests::check();
     playback_manager::tests::check();
     audio_player_bar::gtk_check();
     sidebar::gtk_checks();
