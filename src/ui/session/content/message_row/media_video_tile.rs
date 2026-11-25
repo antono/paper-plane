@@ -11,6 +11,7 @@ use gtk::subclass::prelude::*;
 use super::FileStatus;
 use crate::model;
 use crate::model::MediaType;
+use crate::ui::session::player_stream::PlayerStream;
 use crate::ui::MediaViewer;
 use crate::ui::ViewerEntry;
 use crate::ui::ViewerItem;
@@ -54,7 +55,7 @@ mod imp {
         pub(super) message: glib::WeakRef<model::Message>,
         /// The loaded media stream, if any. Only animations own a stream in
         /// the chat; videos are played in the media viewer.
-        pub(super) media: RefCell<Option<gtk::MediaFile>>,
+        pub(super) media: RefCell<Option<PlayerStream>>,
         pub(super) prepared_handler_id: RefCell<Option<glib::SignalHandlerId>>,
         /// Whether the playback should start as soon as the media stream is
         /// ready, as a result of an explicit user action. Only animations
@@ -180,10 +181,8 @@ mod imp {
 
         fn unmap(&self) {
             // The media pipeline is stopped as soon as the widget goes out
-            // of sight. Leaving a merely paused pipeline behind would keep
-            // its resources allocated, and its synchronous teardown on the
-            // main thread at widget destruction could then freeze the whole
-            // UI if the pipeline had gotten stuck in the meantime.
+            // of sight, so that a merely paused pipeline does not keep its
+            // resources allocated.
             let obj = self.obj();
             let imp = obj.imp();
 
@@ -382,9 +381,12 @@ impl MediaVideoTile {
         // The media may have been downloaded right before this call.
         imp.download_button.set_visible(false);
 
-        let media = gtk::MediaFile::for_filename(path.as_str());
+        // The pipeline of the stream changes its state on a worker thread,
+        // so that loading and closing it never blocks the main thread.
+        let media = PlayerStream::new();
         media.set_muted(true);
         media.set_loop(imp.is_animation.get());
+        media.load(path.as_str());
 
         // Start the playback as soon as the stream is ready, if a playback
         // was requested meanwhile.
@@ -419,10 +421,10 @@ impl MediaVideoTile {
     /// Stops the playback and closes the current media stream, freeing the
     /// resources of the underlying pipeline.
     ///
-    /// Closing the stream is essential: merely pausing it would leave a
-    /// full media pipeline behind, whose teardown happens synchronously on
-    /// the main thread when the stream is eventually dropped. If such a
-    /// leftover pipeline got stuck, the whole UI would freeze. The loader
+    /// Closing the stream is essential: merely pausing it would keep a full
+    /// media pipeline, with its decoders and buffers, allocated for media
+    /// that is out of sight. The pipeline is torn down on the worker thread
+    /// of the stream, so a stuck pipeline cannot freeze the UI. The loader
     /// binding and the media metadata are kept, so that the stream can be
     /// prepared again later with [`Self::maybe_prepare_media`].
     fn close_media(&self) {
@@ -435,11 +437,9 @@ impl MediaVideoTile {
         }
 
         if let Some(media) = imp.media.borrow_mut().take() {
-            media.pause();
-            // Clearing the file closes the stream, stopping the pipeline
-            // of the media backend. Merely dropping the stream would leave
-            // the teardown to the object finalization.
-            media.clear();
+            // Unloading stops the pipeline on the worker thread of the
+            // stream, which shuts down once the stream is dropped.
+            media.unload();
         }
 
         imp.pending_play.set(false);
