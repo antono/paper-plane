@@ -109,8 +109,18 @@
             # The crates of the workspace are replaced by empty ones, except for
             # the vendored tdlib-rs: generating and compiling the TDLib API is
             # the longest part of the build, and it only changes with TDLib.
+            # The tests are left out: they are not part of the workspace, and
+            # a change to one of their manifests would rebuild everything.
             dummySrc = craneLib.mkDummySrc {
-              inherit src;
+              src = pkgs.lib.cleanSourceWith {
+                inherit src;
+                filter =
+                  path: _type:
+                  let
+                    tests = toString ./tests;
+                  in
+                  path != tests && !pkgs.lib.hasPrefix "${tests}/" path;
+              };
               extraDummyScript = ''
                 rm -rf $out/tdlib-rs
                 cp -r --no-preserve=mode ${./tdlib-rs} $out/tdlib-rs
