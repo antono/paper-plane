@@ -57,10 +57,17 @@ mod imp {
         pub(super) voice_list: TemplateChild<gtk::ListBox>,
         #[template_child]
         pub(super) music_list: TemplateChild<gtk::ListBox>,
+        #[template_child]
+        pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
+        #[template_child]
+        pub(super) no_results_label: TemplateChild<gtk::Label>,
         /// The loading state of every shared media section, in tab order.
         pub(super) sections: RefCell<Vec<super::Section>>,
         /// The number of tabs whose first page did not arrive yet.
         pub(super) first_pages_pending: Cell<usize>,
+        /// The text searched for in the lists of the shared media, in lower
+        /// case, or empty.
+        pub(super) query: RefCell<String>,
     }
 
     #[glib::object_subclass]
@@ -153,9 +160,21 @@ mod imp {
 
         #[template_callback]
         fn on_visible_page_changed(&self) {
+            let obj = self.obj();
+            // The media have nothing to search in that is shown.
+            self.search_entry
+                .set_visible(self.shared_stack.visible_child_name().as_deref() != Some("media"));
+            obj.update_no_results();
+            obj.load_while_searching();
             // The new tab may be shorter than the viewport, in which case
             // scrolling to the bottom never happens.
-            self.obj().fill_viewport_if_needed();
+            obj.fill_viewport_if_needed();
+        }
+
+        #[template_callback]
+        fn on_search_changed(&self) {
+            let query = self.search_entry.text().trim().to_lowercase();
+            self.obj().search_shared_media(query);
         }
     }
 }
@@ -371,15 +390,7 @@ impl ChatInfoWindow {
     fn setup_shared_media(&self) {
         let imp = self.imp();
 
-        *imp.sections.borrow_mut() = SharedMediaKind::ALL
-            .iter()
-            .map(|kind| Section {
-                kind: *kind,
-                next_from_message_id: Cell::new(0),
-                is_loading: Cell::new(false),
-                is_complete: Cell::new(false),
-            })
-            .collect();
+        Self::reset_sections(imp);
 
         imp.media_grid.connect_child_activated(clone!(
             #[weak(rename_to = obj)]
@@ -404,6 +415,16 @@ impl ChatInfoWindow {
                     obj.jump_to_message(shared_media::row_message_id(row));
                 }
             ));
+            list.set_filter_func(clone!(
+                #[weak(rename_to = obj)]
+                self,
+                #[upgrade_or]
+                true,
+                move |row| {
+                    let query = obj.imp().query.borrow();
+                    shared_media::row_matches(row, &query)
+                }
+            ));
         }
 
         // The first page of every tab tells whether the tab has anything at
@@ -412,6 +433,83 @@ impl ChatInfoWindow {
         for index in 0..SharedMediaKind::ALL.len() {
             self.load_section(index);
         }
+    }
+
+    fn reset_sections(imp: &imp::ChatInfoWindow) {
+        *imp.sections.borrow_mut() = SharedMediaKind::ALL
+            .iter()
+            .map(|kind| Section {
+                kind: *kind,
+                next_from_message_id: Cell::new(0),
+                is_loading: Cell::new(false),
+                is_complete: Cell::new(false),
+            })
+            .collect();
+    }
+
+    /// Shows the rows of the lists that match `query`, in lower case, in
+    /// what they show, e.g. the name of a file, or all of them if it is
+    /// empty.
+    fn search_shared_media(&self, query: String) {
+        let imp = self.imp();
+        if *imp.query.borrow() == query {
+            return;
+        }
+        imp.query.replace(query);
+
+        for list in [
+            &*imp.files_list,
+            &*imp.links_list,
+            &*imp.voice_list,
+            &*imp.music_list,
+        ] {
+            list.invalidate_filter();
+        }
+        self.update_no_results();
+        self.load_while_searching();
+    }
+
+    /// Loads the rest of the visible list while searching in it, so that the
+    /// search finds the older messages as well.
+    fn load_while_searching(&self) {
+        if !self.imp().query.borrow().is_empty() && self.visible_list().is_some() {
+            self.load_more_of_visible_section();
+        }
+    }
+
+    /// The visible tab if it is a list, with its index.
+    fn visible_list(&self) -> Option<(usize, gtk::ListBox)> {
+        let name = self.imp().shared_stack.visible_child_name()?;
+        let index = SharedMediaKind::ALL
+            .iter()
+            .position(|kind| Self::page_name(*kind) == name.as_str())?;
+        let list = self
+            .section_widget(SharedMediaKind::ALL[index])
+            .downcast::<gtk::ListBox>()
+            .ok()?;
+        Some((index, list))
+    }
+
+    /// Says that nothing was found when no row of the visible list matches
+    /// the search, once all of it is loaded.
+    fn update_no_results(&self) {
+        let imp = self.imp();
+        let empty = !imp.query.borrow().is_empty()
+            && self.visible_list().is_some_and(|(index, list)| {
+                let is_complete = imp
+                    .sections
+                    .borrow()
+                    .get(index)
+                    .is_some_and(|section| section.is_complete.get());
+                let mut row = list.first_child();
+                let mut any_match = false;
+                while let Some(widget) = row {
+                    any_match |= widget.is_child_visible();
+                    row = widget.next_sibling();
+                }
+                is_complete && !any_match
+            });
+        imp.no_results_label.set_visible(empty);
     }
 
     fn jump_to_message(&self, message_id: MessageId) {
@@ -555,6 +653,8 @@ impl ChatInfoWindow {
                 self.show_shared_media();
             }
         }
+        self.update_no_results();
+        self.load_while_searching();
 
         // Wait for the new content to be allocated before measuring it.
         glib::idle_add_local_once(clone!(
@@ -583,6 +683,8 @@ impl ChatInfoWindow {
 
         imp.shared_stack
             .set_visible_child_name(Self::page_name(first_visible));
+        imp.search_entry
+            .set_visible(first_visible != SharedMediaKind::Media);
         imp.shared_media_box.set_visible(true);
     }
 
@@ -687,4 +789,10 @@ fn new_property_row(title: &str, subtitle: &str) -> adw::ActionRow {
         .build();
     row.add_css_class("property");
     row
+}
+
+/// The checks of the dialog that need GTK, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    shared_media::gtk_check();
 }

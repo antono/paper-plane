@@ -181,6 +181,7 @@ impl Content {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     message_row::gtk_checks();
+    chat_info_window::gtk_check();
     media_viewer_page::gtk_check();
     media_viewer::gtk_check();
     chat_history::gtk_check();

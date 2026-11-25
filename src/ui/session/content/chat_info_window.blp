@@ -24,135 +24,159 @@ template $PaplChatInfoWindow : Adw.Dialog {
         hscrollbar-policy: never;
         edge-reached => $on_edge_reached() swapped;
 
-        child: Adw.Clamp {
-          maximum-size: 640;
-          tightening-threshold: 480;
+        // The content is as tall as it wants to be: by default a scrolled
+        // window gives its content only its minimum height, which is none
+        // for the tiles of the media grid, so they were not shown.
+        child: Viewport {
+          vscroll-policy: natural;
 
-          child: Box {
-            styles ["main-page"]
+          child: Adw.Clamp {
+            maximum-size: 640;
+            tightening-threshold: 480;
 
-            orientation: vertical;
-
-            $PaplAvatar {
-              size: 128;
-              item: bind template.chat;
-            }
-
-            Label name_label {
-              styles ["title-1"]
-
-              wrap: true;
-              wrap-mode: word_char;
-              justify: center;
-            }
-
-            Inscription subtitle_label {
-              text-overflow: ellipsize_middle;
-              xalign: 0.5;
-            }
-
-            ListBox info_list {
-              styles ["boxed-list"]
-
-              selection-mode: none;
-            }
-
-            Box shared_media_box {
-              styles ["shared-media"]
+            child: Box {
+              styles ["main-page"]
 
               orientation: vertical;
-              visible: false;
 
-              // The tabs scroll sideways instead of making the dialog wider
-              // than a phone screen when they do not fit.
-              ScrolledWindow {
-                vscrollbar-policy: never;
-                propagate-natural-height: true;
-
-                child: Adw.InlineViewSwitcher {
-                  stack: shared_stack;
-                  display-mode: labels;
-                  halign: center;
-                };
+              $PaplAvatar {
+                size: 128;
+                item: bind template.chat;
               }
 
-              Adw.ViewStack shared_stack {
-                vhomogeneous: false;
-                enable-transitions: true;
-                notify::visible-child-name => $on_visible_page_changed() swapped;
+              Label name_label {
+                styles ["title-1"]
 
-                Adw.ViewStackPage {
-                  name: "media";
-                  title: _("Media");
-                  visible: false;
+                wrap: true;
+                wrap-mode: word_char;
+                justify: center;
+              }
 
-                  child: FlowBox media_grid {
-                    styles ["shared-media-grid"]
+              Inscription subtitle_label {
+                text-overflow: ellipsize_middle;
+                xalign: 0.5;
+              }
 
-                    homogeneous: true;
-                    min-children-per-line: 3;
-                    max-children-per-line: 5;
-                    column-spacing: 2;
-                    row-spacing: 2;
-                    selection-mode: none;
-                    activate-on-single-click: true;
-                    valign: start;
+              ListBox info_list {
+                styles ["boxed-list"]
+
+                selection-mode: none;
+              }
+
+              Box shared_media_box {
+                styles ["shared-media"]
+
+                orientation: vertical;
+                visible: false;
+
+                // The tabs scroll sideways instead of making the dialog wider
+                // than a phone screen when they do not fit.
+                ScrolledWindow {
+                  vscrollbar-policy: never;
+                  propagate-natural-height: true;
+
+                  child: Adw.InlineViewSwitcher {
+                    stack: shared_stack;
+                    display-mode: labels;
+                    halign: center;
                   };
                 }
 
-                Adw.ViewStackPage {
-                  name: "files";
-                  title: _("Files");
-                  visible: false;
-
-                  child: ListBox files_list {
-                    styles ["boxed-list"]
-
-                    selection-mode: none;
-                    valign: start;
-                  };
+                // Searches the lists in what their rows show; hidden for the media.
+                SearchEntry search_entry {
+                  placeholder-text: _("Search");
+                  search-changed => $on_search_changed() swapped;
                 }
 
-                Adw.ViewStackPage {
-                  name: "links";
-                  title: _("Links");
-                  visible: false;
+                Adw.ViewStack shared_stack {
+                  vhomogeneous: false;
+                  // A crossfade draws both pages into textures, which showed
+                  // garbage for a long list, and is slow on phones.
+                  enable-transitions: false;
+                  notify::visible-child-name => $on_visible_page_changed() swapped;
 
-                  child: ListBox links_list {
-                    styles ["boxed-list"]
+                  Adw.ViewStackPage {
+                    name: "media";
+                    title: _("Media");
+                    visible: false;
 
-                    selection-mode: none;
-                    valign: start;
-                  };
+                    child: FlowBox media_grid {
+                      styles ["shared-media-grid"]
+
+                      homogeneous: true;
+                      min-children-per-line: 3;
+                      max-children-per-line: 5;
+                      column-spacing: 2;
+                      row-spacing: 2;
+                      selection-mode: none;
+                      activate-on-single-click: true;
+                      valign: start;
+                    };
+                  }
+
+                  Adw.ViewStackPage {
+                    name: "files";
+                    title: _("Files");
+                    visible: false;
+
+                    child: ListBox files_list {
+                      styles ["boxed-list"]
+
+                      selection-mode: none;
+                      valign: start;
+                    };
+                  }
+
+                  Adw.ViewStackPage {
+                    name: "links";
+                    title: _("Links");
+                    visible: false;
+
+                    child: ListBox links_list {
+                      styles ["boxed-list"]
+
+                      selection-mode: none;
+                      valign: start;
+                    };
+                  }
+
+                  Adw.ViewStackPage {
+                    name: "voice";
+                    title: _("Voice");
+                    visible: false;
+
+                    child: ListBox voice_list {
+                      styles ["boxed-list"]
+
+                      selection-mode: none;
+                      valign: start;
+                    };
+                  }
+
+                  Adw.ViewStackPage {
+                    name: "music";
+                    title: _("Music");
+                    visible: false;
+
+                    child: ListBox music_list {
+                      styles ["boxed-list"]
+
+                      selection-mode: none;
+                      valign: start;
+                    };
+                  }
                 }
 
-                Adw.ViewStackPage {
-                  name: "voice";
-                  title: _("Voice");
+                Label no_results_label {
+                  styles ["dim-label"]
+
+                  label: _("Nothing found");
+                  margin-top: 24;
+                  margin-bottom: 24;
                   visible: false;
-
-                  child: ListBox voice_list {
-                    styles ["boxed-list"]
-
-                    selection-mode: none;
-                    valign: start;
-                  };
-                }
-
-                Adw.ViewStackPage {
-                  name: "music";
-                  title: _("Music");
-                  visible: false;
-
-                  child: ListBox music_list {
-                    styles ["boxed-list"]
-
-                    selection-mode: none;
-                    valign: start;
-                  };
                 }
               }
-            }
+            };
           };
         };
       };
