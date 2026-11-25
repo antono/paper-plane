@@ -741,12 +741,7 @@ fn message_thumbnail_texture(message: model::Message) -> Option<gdk::Texture> {
         MessageVideo(data) => data.video.minithumbnail,
         _ => None,
     }
-    .map(|thumbnail| {
-        gdk::Texture::from_bytes(&glib::Bytes::from_owned(glib::base64_decode(
-            &thumbnail.data,
-        )))
-        .unwrap()
-    })
+    .and_then(|thumbnail| ui::texture_loader::minithumbnail(&thumbnail))
 }
 
 fn draft_message_text(message: tdlib::types::DraftMessage) -> String {

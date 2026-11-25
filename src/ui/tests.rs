@@ -130,6 +130,7 @@ fn gtk() {
     crate::expressions::gtk_check();
     super::client_view::gtk_check();
     crate::utils::gtk_check();
+    super::texture_loader::gtk_check();
     super::components::sticker_gtk_check();
     super::session::gtk_checks();
 }

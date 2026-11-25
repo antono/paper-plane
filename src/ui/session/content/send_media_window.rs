@@ -134,7 +134,19 @@ impl SendMediaWindow {
             .build();
         let imp = obj.imp();
 
-        imp.picture.set_filename(Some(&path));
+        // The photo may be large, so it is decoded off the main thread.
+        let picture = imp.picture.downgrade();
+        let decoded_path = path.clone();
+        glib::spawn_future_local(async move {
+            match ui::texture_loader::decode(&decoded_path).await {
+                Ok(texture) => {
+                    if let Some(picture) = picture.upgrade() {
+                        picture.set_paintable(Some(&texture));
+                    }
+                }
+                Err(e) => log::warn!("Failed to load the photo to send: {e}"),
+            }
+        });
         imp.caption_entry.set_chat(Some(chat.clone()));
 
         imp.chat.set(Some(chat));

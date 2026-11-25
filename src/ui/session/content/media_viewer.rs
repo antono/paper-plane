@@ -96,7 +96,7 @@ impl ViewerItem {
                         .photo
                         .minithumbnail
                         .as_ref()
-                        .and_then(utils::texture_from_minithumbnail),
+                        .and_then(crate::ui::texture_loader::minithumbnail),
                 })
             }
             tdlib::enums::MessageContent::MessageVideo(data) => Some(Self::Video {
@@ -105,7 +105,7 @@ impl ViewerItem {
                     .video
                     .minithumbnail
                     .as_ref()
-                    .and_then(utils::texture_from_minithumbnail),
+                    .and_then(crate::ui::texture_loader::minithumbnail),
                 is_animation: false,
             }),
             tdlib::enums::MessageContent::MessageAnimation(data) => Some(Self::Video {
@@ -114,7 +114,7 @@ impl ViewerItem {
                     .animation
                     .minithumbnail
                     .as_ref()
-                    .and_then(utils::texture_from_minithumbnail),
+                    .and_then(crate::ui::texture_loader::minithumbnail),
                 is_animation: true,
             }),
             _ => None,

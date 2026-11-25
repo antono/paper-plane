@@ -5,6 +5,7 @@ mod login;
 mod session;
 #[cfg(test)]
 mod tests;
+pub(crate) mod texture_loader;
 mod window;
 
 use gtk::glib::prelude::*;

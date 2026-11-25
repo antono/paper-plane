@@ -34,6 +34,9 @@ mod imp {
         /// The file id of the thumbnail that should be downloaded once the
         /// widget is shown, or 0 if there is none.
         pub(super) pending_thumbnail_file_id: Cell<i32>,
+        /// The path of the thumbnail that is shown or being decoded, so that
+        /// a thumbnail decoded for a previous message is not shown.
+        pub(super) thumbnail_path: RefCell<Option<String>>,
         pub(super) loader: super::super::MediaLoader,
         #[template_child]
         pub(super) message_bubble: TemplateChild<ui::MessageBubble>,
@@ -185,9 +188,7 @@ impl MessageDocument {
             session,
             async move {
                 if let Ok(file) = session.download_file(file_id).await {
-                    obj.imp()
-                        .file_thumbnail_picture
-                        .set_filename(Some(&file.local.path));
+                    obj.show_thumbnail_file(file.local.path);
                 }
             }
         ));
@@ -316,6 +317,35 @@ impl MessageDocument {
         }
     }
 
+    /// Shows the thumbnail at `path`, decoded off the main thread unless it
+    /// has been shown before.
+    fn show_thumbnail_file(&self, path: String) {
+        let imp = self.imp();
+
+        if let Some(texture) = ui::texture_loader::cached(&path) {
+            imp.thumbnail_path.replace(Some(path));
+            imp.file_thumbnail_picture.set_paintable(Some(&texture));
+            return;
+        }
+
+        imp.thumbnail_path.replace(Some(path.clone()));
+        utils::spawn(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                match ui::texture_loader::load(&path).await {
+                    Ok(texture) => {
+                        let imp = obj.imp();
+                        if imp.thumbnail_path.borrow().as_deref() == Some(path.as_str()) {
+                            imp.file_thumbnail_picture.set_paintable(Some(&texture));
+                        }
+                    }
+                    Err(e) => log::warn!("Failed to load a document thumbnail: {e}"),
+                }
+            }
+        ));
+    }
+
     fn try_load_thumbnail(&self, message: &model::Message) {
         if let tdlib::enums::MessageContent::MessageDocument(data) = message.content().0 {
             let imp = self.imp();
@@ -324,17 +354,16 @@ impl MessageDocument {
                 imp.file_thumbnail_picture.set_visible(true);
                 imp.file_box.add_css_class("with-thumbnail");
                 if thumbnail.file.local.is_downloading_completed {
-                    imp.file_thumbnail_picture
-                        .set_filename(Some(&thumbnail.file.local.path));
+                    self.show_thumbnail_file(thumbnail.file.local.path);
                 } else {
-                    if let Some(minithumbnail) = data.document.minithumbnail {
-                        let minithumbnail = gdk::Texture::from_bytes(&glib::Bytes::from_owned(
-                            glib::base64_decode(&minithumbnail.data),
-                        ))
-                        .unwrap();
-                        imp.file_thumbnail_picture
-                            .set_paintable(Some(&minithumbnail));
-                    }
+                    imp.thumbnail_path.replace(None);
+                    let minithumbnail = data
+                        .document
+                        .minithumbnail
+                        .as_ref()
+                        .and_then(ui::texture_loader::minithumbnail);
+                    imp.file_thumbnail_picture
+                        .set_paintable(minithumbnail.as_ref());
 
                     // The thumbnail is downloaded when the widget is shown, so
                     // that thumbnails that are only scrolled past are not
@@ -343,6 +372,7 @@ impl MessageDocument {
                     self.maybe_download_thumbnail();
                 }
             } else {
+                imp.thumbnail_path.replace(None);
                 imp.status_indicator.set_masked(true);
                 imp.file_thumbnail_picture.set_visible(false);
                 imp.file_thumbnail_picture

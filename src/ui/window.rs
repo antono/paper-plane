@@ -15,6 +15,7 @@ use crate::strings;
 use crate::types::ChatId;
 use crate::types::ClientId;
 use crate::ui;
+use crate::ui::texture_loader;
 use crate::utils;
 use crate::Application;
 
@@ -282,43 +283,48 @@ fn handle_notification_group(
             continue;
         };
 
-        let avatar_file = &avatar.0;
-        if avatar_file.local.is_downloading_completed {
-            match gdk::Texture::from_filename(&avatar_file.local.path) {
-                Ok(texture) => notification.set_icon(&texture),
-                Err(e) => log::warn!(
-                    "Notification {notification_id}: failed to load avatar texture: {e:?}"
-                ),
+        let avatar_file = avatar.0;
+        let is_downloaded = avatar_file.local.is_downloading_completed;
+        if is_downloaded {
+            if let Some(texture) = texture_loader::cached(&avatar_file.local.path) {
+                notification.set_icon(&texture);
+                log::debug!("Notification {notification_id}: sending with cached avatar");
+                send(&notification_id, &notification);
+                continue;
             }
-            log::debug!("Notification {notification_id}: sending with loaded avatar");
-            send(&notification_id, &notification);
-            continue;
         }
 
+        // The avatar is downloaded or decoded off the main thread, and the
+        // notification is sent again with it.
         log::debug!(
-            "Notification {notification_id}: sending without icon, downloading {}",
+            "Notification {notification_id}: sending without icon, loading {}",
             avatar_file.id
         );
         send(&notification_id, &notification);
 
-        let file_id = avatar_file.id;
         let send = send.clone();
         utils::spawn(clone!(
             #[weak]
             session,
             async move {
-                match session.download_file(file_id).await {
-                    Ok(file) => match gdk::Texture::from_filename(file.local.path) {
-                        Ok(texture) => {
-                            notification.set_icon(&texture);
-                            log::debug!(
-                                "Notification {notification_id}: re-sending with downloaded avatar"
-                            );
-                            send(&notification_id, &notification);
+                let path = if is_downloaded {
+                    avatar_file.local.path
+                } else {
+                    match session.download_file(avatar_file.id).await {
+                        Ok(file) => file.local.path,
+                        Err(e) => {
+                            log::warn!("Failed to download an avatar: {e:?}");
+                            return;
                         }
-                        Err(e) => log::warn!("Failed to load a downloaded avatar: {e:?}"),
-                    },
-                    Err(e) => log::warn!("Failed to download an avatar: {e:?}"),
+                    }
+                };
+                match texture_loader::load(&path).await {
+                    Ok(texture) => {
+                        notification.set_icon(&texture);
+                        log::debug!("Notification {notification_id}: re-sending with avatar");
+                        send(&notification_id, &notification);
+                    }
+                    Err(e) => log::warn!("Failed to load an avatar: {e}"),
                 }
             }
         ));

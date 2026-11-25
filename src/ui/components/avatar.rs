@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -11,6 +12,7 @@ use gtk::CompositeTemplate;
 
 use crate::model;
 use crate::strings;
+use crate::ui::texture_loader;
 use crate::utils;
 
 mod imp {
@@ -23,6 +25,9 @@ mod imp {
         pub(super) item: RefCell<Option<glib::Object>>,
         pub(super) user_signal_group: OnceCell<glib::SignalGroup>,
         pub(super) chat_signal_group: OnceCell<glib::SignalGroup>,
+        /// The TDLib id of the photo file that is shown or being loaded, so
+        /// that a photo loaded for a previous item is not shown.
+        pub(super) photo_file_id: Cell<i32>,
         #[template_child]
         pub(super) avatar: TemplateChild<adw::Avatar>,
     }
@@ -226,32 +231,64 @@ impl Avatar {
     }
 
     fn load_image(&self, avatar: Option<model::Avatar>, session: model::ClientStateSession) {
-        if let Some(avatar) = avatar {
-            let file = avatar.0;
-            if file.local.is_downloading_completed {
-                let texture = gdk::Texture::from_filename(&file.local.path).unwrap();
-                self.imp().avatar.set_custom_image(Some(&texture));
-            } else {
-                let file_id = file.id;
+        let imp = self.imp();
 
-                utils::spawn(clone!(
-                    #[weak(rename_to = obj)]
-                    self,
-                    #[weak]
-                    session,
-                    async move {
-                        obj.download_avatar(file_id, &session).await;
-                    }
-                ));
+        let Some(avatar) = avatar else {
+            imp.photo_file_id.set(0);
+            imp.avatar.set_custom_image(gdk::Paintable::NONE);
+            return;
+        };
+
+        let file = avatar.0;
+        imp.photo_file_id.set(file.id);
+
+        if file.local.is_downloading_completed {
+            // A photo shown before is shown right away, as rows are recycled
+            // while scrolling.
+            if let Some(texture) = texture_loader::cached(&file.local.path) {
+                imp.avatar.set_custom_image(Some(&texture));
+                return;
             }
+
+            let path = file.local.path;
+            utils::spawn(clone!(
+                #[weak(rename_to = obj)]
+                self,
+                async move {
+                    obj.show_photo(file.id, &path).await;
+                }
+            ));
         } else {
-            self.imp().avatar.set_custom_image(gdk::Paintable::NONE);
+            utils::spawn(clone!(
+                #[weak(rename_to = obj)]
+                self,
+                #[weak]
+                session,
+                async move {
+                    obj.download_avatar(file.id, &session).await;
+                }
+            ));
+        }
+    }
+
+    /// Decodes the photo at `path` off the main thread and shows it, unless
+    /// another photo is to be shown meanwhile.
+    async fn show_photo(&self, file_id: i32, path: &str) {
+        match texture_loader::load(path).await {
+            Ok(texture) => {
+                let imp = self.imp();
+                if imp.photo_file_id.get() == file_id {
+                    imp.avatar.set_custom_image(Some(&texture));
+                }
+            }
+            Err(e) => log::warn!("Failed to load an avatar: {e}"),
         }
     }
 
     fn update_avatar(&self) {
         let imp = self.imp();
 
+        imp.photo_file_id.set(0);
         imp.avatar.set_custom_image(gdk::Paintable::NONE);
         imp.avatar.set_icon_name(None);
         imp.avatar.set_show_initials(true);
@@ -295,8 +332,9 @@ impl Avatar {
     async fn download_avatar(&self, file_id: i32, session: &model::ClientStateSession) {
         match session.download_file(file_id).await {
             Ok(file) => {
-                let texture = gdk::Texture::from_filename(file.local.path).unwrap();
-                self.imp().avatar.set_custom_image(Some(&texture));
+                if self.imp().photo_file_id.get() == file_id {
+                    self.show_photo(file_id, &file.local.path).await;
+                }
             }
             Err(e) => {
                 log::warn!("Failed to download an avatar: {e:?}");

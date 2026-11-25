@@ -110,7 +110,7 @@ impl MediaThumbnail {
     pub(crate) fn set_preview(&self, minithumbnail: Option<&tdlib::types::Minithumbnail>) {
         let imp = self.imp();
 
-        let preview = minithumbnail.and_then(utils::texture_from_minithumbnail);
+        let preview = minithumbnail.and_then(crate::ui::texture_loader::minithumbnail);
         imp.picture.set_paintable(preview.as_ref());
         *imp.preview.borrow_mut() = preview;
     }
