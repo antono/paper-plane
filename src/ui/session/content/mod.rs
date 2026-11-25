@@ -52,6 +52,7 @@ pub(crate) use self::message_row::MessageText;
 pub(crate) use self::message_row::MessageVenue;
 pub(crate) use self::message_row::MessageVideo;
 pub(crate) use self::message_row::MessageVoiceNote;
+pub(crate) use self::message_row::QuickReactions;
 pub(crate) use self::message_row::ReactionsChooser;
 pub(crate) use self::message_row::Row as MessageRow;
 pub(crate) use self::message_selection::MessageSelection;

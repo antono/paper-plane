@@ -136,6 +136,29 @@ screen. The fake orders forwarded messages as a
 pending `updateNewMessage` followed by `updateMessageSendSucceeded`, which is
 inferred and not checked against TDLib.
 
+Reactions of every type and the menu that a tap opens (as in Telegram for
+phones). Chips under a message show emoji, custom emoji (their sticker,
+fetched with `getCustomEmojiStickers` and cached) and the paid reaction (a
+star that only shows the count; a tap on it goes to the message). The picker
+of all reactions offers the top, recent and popular reactions with custom
+emoji, never the paid one. A tap on a message (outside buttons, media and
+anything else with its own click gesture, and not in the selection mode or as
+the second tap of a double tap) opens the message menu, whose first row holds
+the first six reactions and a button that opens the picker of all at the
+same place. Covered by the unit tests
+`model::message::reaction_tests::available_reactions_include_the_popular_ones_once`
+and `reaction_keys_round_trip`, the gtk checks `reaction picker`, `reaction
+pictures`, `quick reactions of the message menu`, `message menu: taps on
+clickable parts are theirs` and `message menu: a tap opens it, except on
+buttons and while selecting`, and the end-to-end test
+`media-replies-reactions-and-permissions` (custom emoji and paid chips, a custom
+emoji sent as one, a paid one never sent, the menu with its reactions rendered to
+`message-menu.png`), plus the `reactions:` and `tap menu:` mutations. Not
+covered: a real touch (the tap gesture is touch-only and driven by its signal),
+the scrolling drag cancelling the tap, the sticker of a custom emoji from a real
+TDLib (the fake has none, so the picture stays empty) and the narrow layout of
+the menu on a phone.
+
 ## Known gaps
 
 None. The behaviour that the independent review of 2026-11-20 found untested is

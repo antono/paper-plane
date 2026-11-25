@@ -82,6 +82,37 @@ fn descendant<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Option<T> {
     None
 }
 
+/// Every descendant of `widget` of type `T`.
+fn descendants<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Vec<T> {
+    let mut found = Vec::new();
+    if let Some(widget) = widget.downcast_ref::<T>() {
+        found.push(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        found.extend(descendants::<T>(&c));
+        child = c.next_sibling();
+    }
+    found
+}
+
+/// Renders a shown native widget (a popover) to `<output_dir>/<name>.png`.
+fn render_widget(widget: &gtk::Widget, name: &str) {
+    let Some(renderer) = widget.native().and_then(|native| native.renderer()) else {
+        log::warn!("render: {name} is not realized");
+        return;
+    };
+    let paintable = gtk::WidgetPaintable::new(Some(widget));
+    let snapshot = gtk::Snapshot::new();
+    paintable.snapshot(&snapshot, widget.width() as f64, widget.height() as f64);
+    let Some(node) = snapshot.to_node() else {
+        log::warn!("render: {name} draws nothing");
+        return;
+    };
+    let texture = renderer.render_texture(&node, None);
+    write_artifact(&format!("{name}.png"), &texture.save_to_png_bytes());
+}
+
 impl Application {
     /// Registers the automation actions. No-op on non-`Devel` builds.
     pub(crate) fn setup_automation(&self) {
@@ -152,11 +183,19 @@ impl Application {
             }
         });
         self.add_auto_action(
+            "auto-message-menu",
+            Some(glib::VariantTy::INT64),
+            |app, p| match p.and_then(|p| p.get::<i64>()) {
+                Some(id) => app.auto_message_menu(id),
+                None => log::warn!("auto-message-menu: missing message id"),
+            },
+        );
+        self.add_auto_action(
             "auto-react",
             Some(glib::VariantTy::new("(xs)").unwrap()),
             |app, p| match p.and_then(|p| p.get::<(i64, String)>()) {
                 Some((message_id, emoji)) => match app.open_chat_message(message_id) {
-                    Some(message) => message.toggle_reaction(&emoji),
+                    Some(message) => message.toggle_reaction(model::reaction_type_from_key(&emoji)),
                     None => log::warn!("auto-react: message {message_id} is not loaded"),
                 },
                 None => log::warn!("auto-react: missing parameters"),
@@ -302,6 +341,42 @@ impl Application {
             .and_downcast::<model::ClientStateSession>()
     }
 
+    /// Opens the menu of a shown message of the open chat, as a tap does, and
+    /// renders it to `<output_dir>/message-menu.png` once its reactions are
+    /// in.
+    fn auto_message_menu(&self, id: i64) {
+        let Some(history) = self.chat_history() else {
+            log::warn!("auto-message-menu: no chat history");
+            return;
+        };
+        let row = descendants::<ui::MessageRow>(history.upcast_ref())
+            .into_iter()
+            .find(|row| {
+                row.message()
+                    .downcast_ref::<model::Message>()
+                    .is_some_and(|message| message.id() == id)
+            });
+        let Some(base) = row.and_then(|row| descendant::<ui::MessageBase>(row.upcast_ref()))
+        else {
+            log::warn!("auto-message-menu: message {id} is not shown");
+            return;
+        };
+        base.open_menu();
+
+        let menu = history.message_menu().clone();
+        let reactions = history.quick_reactions().clone();
+        let mut tries = 0;
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            tries += 1;
+            if !reactions.is_visible() && tries < 30 {
+                return glib::ControlFlow::Continue;
+            }
+            render_widget(menu.upcast_ref(), "message-menu");
+            menu.popdown();
+            glib::ControlFlow::Break
+        });
+    }
+
     /// Renders the main window to `<output_dir>/<name>.png`, through the
     /// renderer of the window, so no compositor is needed.
     fn auto_screenshot(&self, name: &str) {
@@ -378,12 +453,9 @@ impl Application {
                             .0
                             .iter()
                             .map(|r| {
-                                let emoji = match &r.r#type {
-                                    tdlib::enums::ReactionType::Emoji(e) => e.emoji.clone(),
-                                    _ => "?".to_owned(),
-                                };
                                 format!(
-                                    "{emoji}{}{}",
+                                    "{}{}{}",
+                                    model::reaction_key(&r.r#type),
                                     r.total_count,
                                     if r.is_chosen { "*" } else { "" }
                                 )

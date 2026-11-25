@@ -495,7 +495,7 @@ impl Chat {
             tdlib::enums::ChatAvailableReactions::Some(data) => data
                 .reactions
                 .iter()
-                .any(|reaction| matches!(reaction, tdlib::enums::ReactionType::Emoji(_))),
+                .any(|reaction| !matches!(reaction, tdlib::enums::ReactionType::Paid)),
         }
     }
 
@@ -901,7 +901,7 @@ mod tests {
             ));
             // Fire-and-forget requests give up quietly.
             message.fetch_properties();
-            message.toggle_reaction("👍");
+            message.toggle_reaction(model::reaction_type_from_key("👍"));
             while context.iteration(false) {}
         });
     }

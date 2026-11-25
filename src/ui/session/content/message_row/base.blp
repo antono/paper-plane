@@ -13,4 +13,12 @@ template $PaplMessageBase {
     propagation-phase: capture;
     pressed => $on_long_pressed() swapped;
   }
+
+  // A tap on a message opens its menu, as in Telegram for phones. It runs in
+  // the bubble phase, after the links, media and buttons below.
+  GestureClick tap {
+    button: 1;
+    touch-only: true;
+    released => $on_tap_released() swapped;
+  }
 }

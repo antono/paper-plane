@@ -87,6 +87,8 @@ pub(crate) use self::media_manager::MediaManager;
 pub(crate) use self::media_manager::MediaType;
 pub(crate) use self::message::Message;
 pub(crate) use self::message::MessageSender;
+pub(crate) use self::message::reaction_key;
+pub(crate) use self::message::reaction_type_from_key;
 pub(crate) use self::message_forward_info::MessageForwardInfo;
 pub(crate) use self::message_forward_info::MessageForwardOrigin;
 pub(crate) use self::message_interaction_info::BoxedMessageReactions;

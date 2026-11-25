@@ -513,7 +513,7 @@ impl Engine {
             "addMessageReaction" | "removeMessageReaction" => {
                 let chat_id = request["chat_id"].as_i64().unwrap_or_default();
                 let message_id = request["message_id"].as_i64().unwrap_or_default();
-                let emoji = request["reaction_type"]["emoji"].as_str().unwrap_or_default().to_owned();
+                let emoji = scenario::reaction_key(&request["reaction_type"]);
                 let adding = type_ == "addMessageReaction";
                 let reactions = self.reactions.entry((chat_id, message_id)).or_default();
                 match reactions.iter_mut().find(|r| r.emoji == emoji) {
@@ -545,6 +545,17 @@ impl Engine {
                         interaction_info,
                     }),
                 );
+            }
+            "getMessageAvailableReactions" => {
+                let reactions =
+                    enums::AvailableReactions::AvailableReactions(scenario::available_reactions());
+                self.emit(client_id, reactions, extra);
+            }
+            // No stickers: the app keeps the place of a custom emoji empty.
+            "getCustomEmojiStickers" => {
+                let stickers =
+                    enums::Stickers::Stickers(types::Stickers { stickers: vec![] });
+                self.emit(client_id, stickers, extra);
             }
             "sendMessage" => self.send_message(client_id, request, extra),
             "forwardMessages" => self.forward_messages(client_id, request, extra),

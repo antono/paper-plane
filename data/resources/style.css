@@ -276,6 +276,49 @@ button.reaction-chip.premium {
   opacity: 0.45;
 }
 
+/* The paid reaction (Telegram Stars) is shown, not sent. */
+messagereactions > button.reaction-chip.paid {
+  background-color: alpha(#f5c211, 0.25);
+}
+
+reactionschooser button.emoji .custom-emoji {
+  padding: 6px;
+  border-radius: 6px;
+}
+
+reactionschooser button.emoji:hover .custom-emoji,
+reactionschooser button.emoji:focus .custom-emoji {
+  background-color: alpha(@accent_bg_color, 0.4);
+}
+
+reactionschooser button.emoji.premium .custom-emoji {
+  opacity: 0.45;
+}
+
+/* The row of reactions at the top of the message menu. */
+quickreactions {
+  padding: 0 0 6px 0;
+}
+
+quickreactions > button.quick-reaction {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+}
+
+quickreactions > button.quick-reaction label.emoji {
+  font-size: x-large;
+}
+
+quickreactions > button.quick-reaction.premium {
+  opacity: 0.45;
+}
+
+quickreactions > button.expand {
+  min-width: 40px;
+  min-height: 40px;
+}
+
 messagebubble.location map {
   border-radius: 14px;
 }

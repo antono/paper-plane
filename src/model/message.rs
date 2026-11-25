@@ -243,8 +243,7 @@ impl Message {
 
     /// Fetches the reactions that can be added to this message from TDLib.
     ///
-    /// The list contains the top reactions followed by the recent ones,
-    /// deduplicated by reaction type.
+    /// See [`merge_available_reactions`] for the order.
     pub(crate) async fn available_reactions(
         &self,
     ) -> Result<Vec<tdlib::types::AvailableReaction>, tdlib::types::Error> {
@@ -258,18 +257,7 @@ impl Message {
         .await?;
 
         let tdlib::enums::AvailableReactions::AvailableReactions(data) = reactions;
-
-        let mut result: Vec<tdlib::types::AvailableReaction> = Vec::new();
-        for reaction in data.top_reactions.into_iter().chain(data.recent_reactions) {
-            if !result
-                .iter()
-                .any(|existing| existing.r#type == reaction.r#type)
-            {
-                result.push(reaction);
-            }
-        }
-
-        Ok(result)
+        Ok(merge_available_reactions(data))
     }
 
     pub(crate) fn handle_update(&self, update: tdlib::enums::Update) {
@@ -292,36 +280,29 @@ impl Message {
             .await
     }
 
-    /// Adds a reaction with the given emoji to this message, or removes it if
-    /// the current user already chose it.
-    pub(crate) fn toggle_reaction(&self, emoji: &str) {
+    /// Adds the reaction to this message, or removes it if the current user
+    /// already chose it. Paid reactions cost Telegram Stars and are left
+    /// alone.
+    pub(crate) fn toggle_reaction(&self, reaction_type: tdlib::enums::ReactionType) {
+        if matches!(reaction_type, tdlib::enums::ReactionType::Paid) {
+            return;
+        }
+
         let is_chosen = self
             .interaction_info()
             .reactions()
             .0
             .iter()
-            .any(|reaction| {
-                reaction.is_chosen
-                    && matches!(&reaction.r#type,
-                        tdlib::enums::ReactionType::Emoji(r)
-                            if r.emoji == emoji)
-            });
-
-        let emoji_owned = emoji.to_string();
+            .any(|reaction| reaction.is_chosen && reaction.r#type == reaction_type);
 
         utils::spawn(clone!(
             #[weak(rename_to = obj)]
             self,
             async move {
-                let emoji = emoji_owned;
                 let chat = obj.chat_();
                 let Ok(client_id) = chat.client_id() else {
                     return;
                 };
-                let reaction_type =
-                    tdlib::enums::ReactionType::Emoji(tdlib::types::ReactionTypeEmoji {
-                        emoji: emoji.to_string(),
-                    });
 
                 let result = if is_chosen {
                     tdlib::functions::remove_message_reaction(
@@ -407,5 +388,116 @@ impl Message {
         } else {
             self.sender_name_expression()
         }
+    }
+}
+
+/// The reactions offered for a message: the top ones first, then the recent
+/// and the popular ones, without duplicates. Together they are every reaction
+/// the chat allows, as in the full picker of Telegram. Paid reactions cost
+/// Telegram Stars and are not offered.
+pub(crate) fn merge_available_reactions(
+    data: tdlib::types::AvailableReactions,
+) -> Vec<tdlib::types::AvailableReaction> {
+    let mut result: Vec<tdlib::types::AvailableReaction> = Vec::new();
+    for reaction in data
+        .top_reactions
+        .into_iter()
+        .chain(data.recent_reactions)
+        .chain(data.popular_reactions)
+    {
+        if matches!(reaction.r#type, tdlib::enums::ReactionType::Paid) {
+            continue;
+        }
+        if !result
+            .iter()
+            .any(|existing| existing.r#type == reaction.r#type)
+        {
+            result.push(reaction);
+        }
+    }
+    result
+}
+
+/// A short text naming a reaction type: the emoji itself, `[ce<id>]` for a
+/// custom emoji and `⭐` for the paid reaction. The inverse of
+/// [`reaction_type_from_key`].
+pub(crate) fn reaction_key(reaction_type: &tdlib::enums::ReactionType) -> String {
+    match reaction_type {
+        tdlib::enums::ReactionType::Emoji(data) => data.emoji.clone(),
+        tdlib::enums::ReactionType::CustomEmoji(data) => format!("[ce{}]", data.custom_emoji_id),
+        tdlib::enums::ReactionType::Paid => "⭐".to_owned(),
+    }
+}
+
+/// The reaction type named by [`reaction_key`].
+pub(crate) fn reaction_type_from_key(key: &str) -> tdlib::enums::ReactionType {
+    if key == "⭐" {
+        return tdlib::enums::ReactionType::Paid;
+    }
+    if let Some(id) = key
+        .strip_prefix("[ce")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|id| id.parse().ok())
+    {
+        return tdlib::enums::ReactionType::CustomEmoji(tdlib::types::ReactionTypeCustomEmoji {
+            custom_emoji_id: id,
+        });
+    }
+    tdlib::enums::ReactionType::Emoji(tdlib::types::ReactionTypeEmoji {
+        emoji: key.to_owned(),
+    })
+}
+
+#[cfg(test)]
+mod reaction_tests {
+    use super::*;
+    use tdlib::enums::ReactionType;
+
+    fn emoji(emoji: &str) -> ReactionType {
+        ReactionType::Emoji(tdlib::types::ReactionTypeEmoji {
+            emoji: emoji.to_owned(),
+        })
+    }
+
+    fn custom(id: i64) -> ReactionType {
+        ReactionType::CustomEmoji(tdlib::types::ReactionTypeCustomEmoji {
+            custom_emoji_id: id,
+        })
+    }
+
+    fn available(types: &[ReactionType]) -> Vec<tdlib::types::AvailableReaction> {
+        types
+            .iter()
+            .map(|r#type| tdlib::types::AvailableReaction {
+                r#type: r#type.clone(),
+                needs_premium: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn available_reactions_include_the_popular_ones_once() {
+        let data = tdlib::types::AvailableReactions {
+            top_reactions: available(&[emoji("👍"), emoji("❤")]),
+            recent_reactions: available(&[emoji("❤"), custom(137)]),
+            popular_reactions: available(&[emoji("👍"), emoji("🔥"), ReactionType::Paid]),
+            allow_custom_emoji: false,
+            are_tags: false,
+            unavailability_reason: None,
+        };
+        let types: Vec<ReactionType> = merge_available_reactions(data)
+            .into_iter()
+            .map(|reaction| reaction.r#type)
+            .collect();
+        assert_eq!(types, [emoji("👍"), emoji("❤"), custom(137), emoji("🔥")]);
+    }
+
+    #[test]
+    fn reaction_keys_round_trip() {
+        for r#type in [emoji("👍"), custom(137), ReactionType::Paid] {
+            assert_eq!(reaction_type_from_key(&reaction_key(&r#type)), r#type);
+        }
+        assert_eq!(reaction_key(&custom(137)), "[ce137]");
+        assert_eq!(reaction_type_from_key("[ce1x]"), emoji("[ce1x]"));
     }
 }

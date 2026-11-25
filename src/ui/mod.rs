@@ -72,6 +72,7 @@ pub(crate) use self::session::MessageVenue;
 pub(crate) use self::session::MessageVideo;
 pub(crate) use self::session::MessageVoiceNote;
 pub(crate) use self::session::PreferencesDialog;
+pub(crate) use self::session::QuickReactions;
 pub(crate) use self::session::ReactionsChooser;
 pub(crate) use self::session::Row as SessionRow;
 pub(crate) use self::session::SendMediaWindow;

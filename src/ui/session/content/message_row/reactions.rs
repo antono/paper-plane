@@ -12,6 +12,8 @@ use crate::model;
 use crate::utils;
 
 const SPACING: i32 = 6;
+/// The size of the picture of a custom emoji in a chip.
+const CHIP_ICON_SIZE: i32 = 20;
 
 mod imp {
     use super::*;
@@ -279,24 +281,20 @@ impl MessageReactions {
             child.unparent();
         }
 
-        for reaction in &reactions.0 {
-            let emoji = match &reaction.r#type {
-                tdlib::enums::ReactionType::Emoji(data) => data.emoji.clone(),
-                // TODO: Render custom emoji reactions
-                tdlib::enums::ReactionType::CustomEmoji(_) => continue,
-                tdlib::enums::ReactionType::Paid => continue,
-            };
+        let message = self.imp().message.upgrade();
+        let session = message.as_ref().map(|message| message.chat_().session_());
 
-            let label = gtk::Label::builder()
-                .label(format!(
-                    "{} {}",
-                    utils::emoji_string(&emoji),
-                    reaction.total_count
-                ))
-                .build();
+        for reaction in &reactions.0 {
+            let content = gtk::Box::builder().spacing(4).build();
+            content.append(&super::reaction_icon::new(
+                &reaction.r#type,
+                session.clone(),
+                CHIP_ICON_SIZE,
+            ));
+            content.append(&gtk::Label::new(Some(&reaction.total_count.to_string())));
 
             let button = gtk::Button::builder()
-                .child(&label)
+                .child(&content)
                 .css_classes(if reaction.is_chosen {
                     vec!["reaction-chip", "chosen"]
                 } else {
@@ -304,15 +302,23 @@ impl MessageReactions {
                 })
                 .build();
 
-            button.connect_clicked(clone!(
-                #[weak(rename_to = obj)]
-                self,
-                move |_| {
-                    if let Some(message) = obj.imp().message.upgrade() {
-                        message.toggle_reaction(&emoji);
+            if matches!(reaction.r#type, tdlib::enums::ReactionType::Paid) {
+                // Paid reactions cost Telegram Stars: the chip only shows
+                // them, and a tap goes to the message below.
+                button.add_css_class("paid");
+                button.set_can_target(false);
+            } else {
+                let reaction_type = reaction.r#type.clone();
+                button.connect_clicked(clone!(
+                    #[weak(rename_to = obj)]
+                    self,
+                    move |_| {
+                        if let Some(message) = obj.imp().message.upgrade() {
+                            message.toggle_reaction(reaction_type.clone());
+                        }
                     }
-                }
-            ));
+                ));
+            }
 
             button.set_parent(self);
         }

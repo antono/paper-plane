@@ -1,13 +1,14 @@
 using Gtk 4.0;
 
 menu model {
+  // The row of reactions, see `QuickReactions`.
   section {
     item {
-      label: _("_React");
-      action: "message-row.react-menu";
-      hidden-when: "action-disabled";
+      custom: "reactions";
     }
+  }
 
+  section {
     item {
       label: _("_Reply");
       action: "message-row.reply";

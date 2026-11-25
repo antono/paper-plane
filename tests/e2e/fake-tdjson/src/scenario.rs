@@ -93,6 +93,8 @@ pub struct MessageSpec {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReactionSpec {
+    /// The emoji, `[ce<id>]` for a custom emoji or `⭐` for the paid
+    /// reaction, as the app names them (`model::reaction_key`).
     pub emoji: String,
     pub count: i32,
     /// Whether the user of the session chose it.
@@ -448,9 +450,7 @@ pub fn interaction_info(reactions: &[ReactionSpec]) -> Option<types::MessageInte
             reactions: reactions
                 .iter()
                 .map(|r| types::MessageReaction {
-                    r#type: enums::ReactionType::Emoji(types::ReactionTypeEmoji {
-                        emoji: r.emoji.clone(),
-                    }),
+                    r#type: reaction_type(&r.emoji),
                     total_count: r.count,
                     is_chosen: r.chosen,
                     used_sender_id: None,
@@ -491,4 +491,59 @@ pub fn unlisted_chat(person: &Person) -> types::Chat {
     let mut chat = private_chat(&spec, 0);
     chat.positions = vec![];
     chat
+}
+
+/// The reaction type of a key of a [`ReactionSpec`].
+pub fn reaction_type(key: &str) -> enums::ReactionType {
+    if key == "⭐" {
+        return enums::ReactionType::Paid;
+    }
+    match key
+        .strip_prefix("[ce")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|id| id.parse().ok())
+    {
+        Some(custom_emoji_id) => {
+            enums::ReactionType::CustomEmoji(types::ReactionTypeCustomEmoji { custom_emoji_id })
+        }
+        None => enums::ReactionType::Emoji(types::ReactionTypeEmoji {
+            emoji: key.to_owned(),
+        }),
+    }
+}
+
+/// The key of a reaction type of a request, see [`reaction_type`].
+pub fn reaction_key(request: &serde_json::Value) -> String {
+    match request["@type"].as_str() {
+        Some("reactionTypeCustomEmoji") => format!(
+            "[ce{}]",
+            request["custom_emoji_id"]
+                .as_i64()
+                .or_else(|| request["custom_emoji_id"].as_str()?.parse().ok())
+                .unwrap_or_default()
+        ),
+        Some("reactionTypePaid") => "⭐".to_owned(),
+        _ => request["emoji"].as_str().unwrap_or_default().to_owned(),
+    }
+}
+
+/// The reactions offered for every message: a few top ones and the popular
+/// ones, a custom emoji among them.
+pub fn available_reactions() -> types::AvailableReactions {
+    let available = |keys: &[&str]| {
+        keys.iter()
+            .map(|key| types::AvailableReaction {
+                r#type: reaction_type(key),
+                needs_premium: false,
+            })
+            .collect()
+    };
+    types::AvailableReactions {
+        top_reactions: available(&["👍", "❤", "🔥"]),
+        recent_reactions: available(&["[ce137]"]),
+        popular_reactions: available(&["👍", "🎉", "🤔", "😢", "⭐"]),
+        allow_custom_emoji: false,
+        are_tags: false,
+        unavailability_reason: None,
+    }
 }

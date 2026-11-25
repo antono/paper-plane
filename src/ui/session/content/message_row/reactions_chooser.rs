@@ -4,7 +4,9 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 use crate::model;
-use crate::utils;
+
+/// The size of the picture of a custom emoji in the picker.
+const ICON_SIZE: i32 = 32;
 
 mod imp {
     use super::*;
@@ -78,21 +80,23 @@ impl ReactionsChooser {
         // them in its internal list, and it then shows no new buttons.
         imp.flow_box.remove_all();
 
-        for reaction in reactions {
-            let emoji = match &reaction.r#type {
-                tdlib::enums::ReactionType::Emoji(data) => data.emoji.clone(),
-                // TODO: Support custom emoji reactions
-                tdlib::enums::ReactionType::CustomEmoji(_) => continue,
-                tdlib::enums::ReactionType::Paid => continue,
-            };
+        let session = imp
+            .message
+            .upgrade()
+            .map(|message| message.chat_().session_());
 
-            let label = gtk::Label::builder()
-                .label(utils::emoji_string(&emoji))
-                .css_classes(["emoji"])
-                .build();
+        for reaction in reactions {
+            // Paid reactions cost Telegram Stars and are not offered.
+            if matches!(reaction.r#type, tdlib::enums::ReactionType::Paid) {
+                continue;
+            }
 
             let button = gtk::Button::builder()
-                .child(&label)
+                .child(&super::reaction_icon::new(
+                    &reaction.r#type,
+                    session.clone(),
+                    ICON_SIZE,
+                ))
                 .css_classes(["emoji"])
                 .build();
 
@@ -100,13 +104,14 @@ impl ReactionsChooser {
                 button.add_css_class("premium");
             }
 
+            let reaction_type = reaction.r#type;
             button.connect_clicked(clone!(
                 #[weak(rename_to = obj)]
                 self,
                 move |_| {
                     obj.popdown();
                     if let Some(message) = obj.imp().message.upgrade() {
-                        message.toggle_reaction(&emoji);
+                        message.toggle_reaction(reaction_type.clone());
                     }
                 }
             ));
@@ -165,10 +170,13 @@ pub(crate) fn gtk_check() {
                     .and_then(|w| w.downcast::<gtk::Button>().ok())
             })
             .collect();
-        // Custom emoji and paid reactions are not offered yet.
-        assert_eq!(buttons.len(), 2);
+        // Custom emoji are offered, paid reactions are not.
+        assert_eq!(buttons.len(), 3);
         assert!(!buttons[0].has_css_class("premium"));
-        assert!(buttons[1].has_css_class("premium"));
+        assert!(buttons[1]
+            .child()
+            .is_some_and(|child| child.has_css_class("custom-emoji")));
+        assert!(buttons[2].has_css_class("premium"));
 
         // Replacing the reactions replaces the buttons.
         chooser.set_reactions(vec![reaction(emoji("❤️"), false)]);

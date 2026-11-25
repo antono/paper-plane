@@ -16,6 +16,8 @@ mod media_picture;
 mod media_thumbnail;
 mod media_video_tile;
 mod photo;
+mod quick_reactions;
+mod reaction_icon;
 mod reactions;
 mod reactions_chooser;
 mod reply;
@@ -57,6 +59,7 @@ pub(crate) use self::media_picture::MediaPicture;
 pub(crate) use self::media_thumbnail::MediaThumbnail;
 pub(crate) use self::media_video_tile::MediaVideoTile;
 pub(crate) use self::photo::MessagePhoto;
+pub(crate) use self::quick_reactions::QuickReactions;
 pub(crate) use self::reactions::MessageReactions;
 pub(crate) use self::reactions_chooser::ReactionsChooser;
 pub(crate) use self::reply::MessageReply;
@@ -417,19 +420,12 @@ impl Row {
                     }
                 };
 
-                let emoji_reactions: Vec<_> = reactions
-                    .into_iter()
-                    .filter(|reaction| {
-                        matches!(reaction.r#type, tdlib::enums::ReactionType::Emoji(_))
-                    })
-                    .collect();
-
-                if emoji_reactions.is_empty() {
+                if reactions.is_empty() {
                     return;
                 }
 
                 let chooser = ui::ReactionsChooser::new(&message);
-                chooser.set_reactions(emoji_reactions);
+                chooser.set_reactions(reactions);
                 chooser.set_parent(&obj);
                 chooser.connect_closed(|chooser| chooser.unparent());
                 chooser.popup();
@@ -908,6 +904,9 @@ pub(crate) fn gtk_checks() {
     media_video_tile::gtk_check();
     label::gtk_check();
     reactions_chooser::gtk_check();
+    reaction_icon::gtk_check();
+    quick_reactions::gtk_check();
+    base::gtk_check();
     video::gtk_check();
 
     eprintln!("message label lookup for Copy Text");

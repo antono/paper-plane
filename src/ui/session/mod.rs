@@ -53,6 +53,7 @@ pub(crate) use self::content::MessageText;
 pub(crate) use self::content::MessageVenue;
 pub(crate) use self::content::MessageVideo;
 pub(crate) use self::content::MessageVoiceNote;
+pub(crate) use self::content::QuickReactions;
 pub(crate) use self::content::ReactionsChooser;
 pub(crate) use self::content::SendMediaWindow;
 pub(crate) use self::content::ViewerEntry;

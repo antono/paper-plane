@@ -41,6 +41,7 @@ mod imp {
         pub(super) chat_handler: RefCell<Option<glib::SignalHandlerId>>,
         pub(super) model: RefCell<Option<model::ChatHistoryModel>>,
         pub(super) message_menu: OnceCell<gtk::PopoverMenu>,
+        pub(super) quick_reactions: OnceCell<ui::QuickReactions>,
         pub(super) is_auto_scrolling: Cell<bool>,
         pub(super) is_loading_messages: Cell<bool>,
         pub(super) sticky: Cell<bool>,
@@ -762,8 +763,18 @@ impl ChatHistory {
                 gtk::Align::Start
             });
 
+            let quick_reactions = ui::QuickReactions::default();
+            assert!(menu.add_child(&quick_reactions, "reactions"));
+            self.imp().quick_reactions.set(quick_reactions).unwrap();
+
             menu
         })
+    }
+
+    /// The row of reactions at the top of the message menu.
+    pub(crate) fn quick_reactions(&self) -> &ui::QuickReactions {
+        self.message_menu();
+        self.imp().quick_reactions.get().unwrap()
     }
 
     pub(crate) fn handle_paste_action(&self) {
@@ -1316,6 +1327,7 @@ pub(crate) fn gtk_check() {
     use crate::model::test_support::*;
 
     selection_gtk_check();
+    message_tap_gtk_check();
 
     eprintln!("secret chat style in the chat history");
 
@@ -1593,6 +1605,150 @@ pub(crate) fn selection_gtk_check() {
         assert!(!has_view(&message_row) && !has_view(&message_row_2));
 
         second_row.unparent();
+        history_row.unparent();
+        window.set_child(None::<&gtk::Widget>);
+        window.destroy();
+    });
+}
+
+/// The first descendant of `widget` of type `T` that matches `wanted`.
+#[cfg(test)]
+fn find_descendant<T: IsA<gtk::Widget>>(
+    widget: &gtk::Widget,
+    wanted: &dyn Fn(&T) -> bool,
+) -> Option<T> {
+    if let Some(found) = widget.downcast_ref::<T>().filter(|found| wanted(found)) {
+        return Some(found.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(child_) = child {
+        if let Some(found) = find_descendant(&child_, wanted) {
+            return Some(found);
+        }
+        child = child_.next_sibling();
+    }
+    None
+}
+
+/// A tap on a message opens its menu with the row of reactions, see
+/// `MessageBase`.
+#[cfg(test)]
+fn message_tap_gtk_check() {
+    use gtk::graphene;
+
+    use crate::model::test_support::*;
+
+    eprintln!("message menu: a tap opens it, except on buttons and while selecting");
+    isolated(|| {
+        let session = session();
+        add_user(&session, 42);
+        let chat = add_private_chat(&session, 42, 42, "Alice");
+        let history = ChatHistory::new();
+        history.set_chat(Some(&chat));
+
+        let reaction = |r#type, total_count| tdlib::types::MessageReaction {
+            r#type,
+            total_count,
+            is_chosen: false,
+            used_sender_id: None,
+            recent_sender_ids: vec![],
+        };
+        let mut tapped = message(42, 1, DAY, 0, text("tap me"));
+        tapped.interaction_info = Some(tdlib::types::MessageInteractionInfo {
+            view_count: 0,
+            forward_count: 0,
+            reply_info: None,
+            reactions: Some(tdlib::types::MessageReactions {
+                reactions: vec![
+                    reaction(model::reaction_type_from_key("👍"), 2),
+                    reaction(tdlib::enums::ReactionType::Paid, 137),
+                ],
+                are_tags: false,
+                paid_reactors: vec![],
+                can_get_added_reactions: false,
+            }),
+        });
+        new_message(&session, tapped);
+
+        let window = gtk::Window::new();
+        window.set_child(Some(&history));
+        window.present();
+        let context = glib::MainContext::default();
+        for _ in 0..200 {
+            if history.is_mapped() {
+                break;
+            }
+            context.iteration(false);
+        }
+        assert!(history.is_mapped(), "the history is shown");
+
+        let history_row = ui::ChatHistoryRow::new();
+        history_row.set_parent(&history);
+        history_row.set_item(Some(
+            model::ChatHistoryItem::for_message(chat.message(1).unwrap()).upcast(),
+        ));
+        let (_, height, _, _) = history_row.measure(gtk::Orientation::Vertical, 360);
+        history_row.size_allocate(&gtk::gdk::Rectangle::new(0, 0, 360, height), -1);
+
+        let base = find_descendant::<ui::MessageBase>(history_row.upcast_ref(), &|_| true)
+            .expect("the message widget");
+        let tap = base
+            .observe_controllers()
+            .snapshot()
+            .into_iter()
+            .filter_map(|c| c.downcast::<gtk::GestureClick>().ok())
+            .find(|click| click.is_touch_only())
+            .expect("the tap gesture");
+        let tap_at = |widget: &gtk::Widget, n_press: i32| {
+            let center = graphene::Point::new(
+                widget.width() as f32 / 2.0,
+                widget.height() as f32 / 2.0,
+            );
+            let point = widget.compute_point(&base, &center).unwrap();
+            tap.emit_by_name::<()>(
+                "released",
+                &[&n_press, &(point.x() as f64), &(point.y() as f64)],
+            );
+        };
+        let label = find_descendant::<gtk::Label>(base.upcast_ref(), &|label| {
+            label.text().contains("tap me")
+        })
+        .expect("the text of the message");
+        let chip = |paid: bool| {
+            find_descendant::<gtk::Button>(base.upcast_ref(), &|button| {
+                button.has_css_class("reaction-chip") && button.has_css_class("paid") == paid
+            })
+            .expect("a reaction chip")
+        };
+        let menu = history.message_menu();
+
+        tap_at(label.upcast_ref(), 1);
+        assert!(menu.is_visible(), "a tap on the text opens the menu");
+        assert_eq!(
+            history.quick_reactions().message().map(|m| m.id()),
+            Some(1),
+            "the reactions of the tapped message"
+        );
+        menu.popdown();
+
+        tap_at(chip(false).upcast_ref(), 1);
+        assert!(!menu.is_visible(), "a tap on a reaction only reacts");
+
+        // The paid chip only shows the stars, a tap goes to the message.
+        tap_at(chip(true).upcast_ref(), 1);
+        assert!(menu.is_visible(), "a tap on the paid reaction opens the menu");
+        menu.popdown();
+
+        tap_at(label.upcast_ref(), 2);
+        assert!(!menu.is_visible(), "the second tap of a double tap does not");
+
+        history
+            .activate_action("chat-history.toggle-selection", Some(&1i64.to_variant()))
+            .unwrap();
+        tap_at(label.upcast_ref(), 1);
+        assert!(!menu.is_visible(), "a tap selects in the selection mode");
+        history.selection().clear();
+
         history_row.unparent();
         window.set_child(None::<&gtk::Widget>);
         window.destroy();

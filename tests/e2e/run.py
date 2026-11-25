@@ -359,13 +359,37 @@ def test_media_replies_reactions_and_permissions(app):
 
     # A reaction is added and removed again through the model
     # (Message::toggle_reaction, 18fb29ce).
-    assert app.state()["reactions"][3] == "👍2"
+    # Custom emoji and paid reactions are shown too: the chip of the custom
+    # emoji asks TDLib for its sticker.
+    assert app.state()["reactions"][3] == "👍2,[ce137]3,⭐10"
+    stickers = app.wait_for(
+        "the sticker of the custom emoji",
+        lambda: app.requests("getCustomEmojiStickers"),
+    )
+    assert stickers[0]["request"]["custom_emoji_ids"] in ([137], ["137"]), stickers
     app.action("auto-react", "(int64 3, '👍')")
-    app.wait_for("the added reaction", lambda: app.state()["reactions"][3] == "👍3*")
+    app.wait_for(
+        "the added reaction",
+        lambda: app.state()["reactions"][3] == "👍3*,[ce137]3,⭐10",
+    )
     assert app.requests("addMessageReaction")[0]["request"]["message_id"] == 3
     app.action("auto-react", "(int64 3, '👍')")
-    app.wait_for("the removed reaction", lambda: app.state()["reactions"][3] == "👍2")
+    app.wait_for(
+        "the removed reaction",
+        lambda: app.state()["reactions"][3] == "👍2,[ce137]3,⭐10",
+    )
     assert app.requests("removeMessageReaction"), "the reaction was not removed"
+    # Paid reactions cost Telegram Stars and are never sent; a custom emoji
+    # is sent as one.
+    app.action("auto-react", "(int64 3, '⭐')")
+    app.action("auto-react", "(int64 3, '[ce137]')")
+    app.wait_for(
+        "the added custom emoji",
+        lambda: app.state()["reactions"][3] == "👍2,[ce137]4*,⭐10",
+    )
+    added = [r["request"]["reaction_type"] for r in app.requests("addMessageReaction")]
+    assert len(added) == 2, added
+    assert added[1]["@type"] == "reactionTypeCustomEmoji", added
 
     # Whether a message can be edited comes from getMessageProperties, which
     # is only fetched when its menu opens, not for every loaded message
@@ -381,6 +405,12 @@ def test_media_replies_reactions_and_permissions(app):
     assert app.state()["can-edit"][3] == "false"
     asked = {r["request"]["message_id"] for r in app.requests("getMessageProperties")}
     assert {3, 4} <= asked, asked
+
+    # A tap opens the menu of a message with its reactions first
+    # (getMessageAvailableReactions).
+    app.action("auto-message-menu", "int64 3")
+    app.wait_for("the menu with its reactions", lambda: (app.out / "message-menu.png").exists())
+    assert app.requests("getMessageAvailableReactions")[-1]["request"]["message_id"] == 3
 
     app.quit()
     app.assert_all_requests_supported()
