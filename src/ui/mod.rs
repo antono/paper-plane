@@ -34,6 +34,7 @@ pub(crate) use self::login::OtherDevice as LoginOtherDevice;
 pub(crate) use self::login::Password as LoginPassword;
 pub(crate) use self::login::PhoneNumber as LoginPhoneNumber;
 pub(crate) use self::login::Registration as LoginRegistration;
+pub(crate) use self::session::AudioPlayerBar;
 pub(crate) use self::session::Background;
 pub(crate) use self::session::ChatActionBar;
 pub(crate) use self::session::ChatHistory;
@@ -151,6 +152,7 @@ pub(crate) fn init() {
     MessageVenue::static_type();
     MessageVideo::static_type();
     MessageVoiceNote::static_type();
+    AudioPlayerBar::static_type();
     PhoneNumberInput::static_type();
     ScaleRevealer::static_type();
     PreferencesDialog::static_type();

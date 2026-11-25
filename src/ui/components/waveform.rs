@@ -9,6 +9,8 @@ use gtk::subclass::prelude::*;
 const MIN_BAR_HEIGHT: f64 = 3.0;
 const BAR_WIDTH: f64 = 3.0;
 const BAR_SPACING: f64 = 2.0;
+/// The opacity of the bars that are not played yet.
+const UNPLAYED_ALPHA: f32 = 0.4;
 
 mod imp {
     use super::*;
@@ -93,8 +95,13 @@ mod imp {
 fn draw(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i32, height: i32) {
     let area = area.downcast_ref::<Waveform>().unwrap();
 
-    let foreground = area.color();
     let accent = adw::StyleManager::default().accent_color_rgba();
+    // The part that is not played yet is dimmed, so that the played part
+    // stands out in the accent color.
+    let foreground = {
+        let color = area.color();
+        color.with_alpha(color.alpha() * UNPLAYED_ALPHA)
+    };
 
     let peaks = area.imp().peaks.borrow();
     let progress = area.imp().progress.get();
@@ -127,7 +134,7 @@ fn draw(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i32, height: i
 
         let x = i as f64 * bar_total_width + BAR_WIDTH / 2.0;
 
-        let color = if (i + 1) as f64 / max_bars as f64 <= progress {
+        let color = if progress > 0.0 && (i as f64 + 0.5) / max_bars as f64 <= progress {
             accent
         } else {
             foreground

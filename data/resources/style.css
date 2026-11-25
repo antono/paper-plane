@@ -741,3 +741,14 @@ textview.message-text-view,
 textview.message-text-view > text {
   background: transparent;
 }
+
+/* The bar of the played voice note, see AudioPlayerBar */
+audioplayerbar .controls {
+  padding: 3px 6px;
+}
+
+audioplayerbar progressbar trough,
+audioplayerbar progressbar progress {
+  min-height: 2px;
+  border-radius: 0;
+}

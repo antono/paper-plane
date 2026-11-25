@@ -1,7 +1,7 @@
 //! A shared playback engine that owns a single `gtk::MediaFile` per session.
 //!
-//! Widgets that play media (the media viewer, and in the future audio
-//! message rows) borrow the stream of this manager instead of creating
+//! Widgets that play media (the media viewer and the voice note rows)
+//! borrow the stream of this manager instead of creating
 //! their own, so that at most one media pipeline exists per session.
 //!
 //! The `MediaFile` is exposed to the clients for read-only inspection
@@ -13,7 +13,13 @@
 //! or connect their own `prepared`/`error` handlers. Playback control
 //! goes through the methods of the manager, and the per-playback hooks
 //! passed to `play_file` replace signal handlers.
+//!
+//! A voice note marks its playback with `set_audio_message`, so that the
+//! player bar shows it. Widgets that follow the playback (the voice note
+//! rows and the player bar) connect to `connect_changed` for changes of the
+//! current playback and to the notifications of the stream for its state.
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
@@ -21,9 +27,14 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 
+use crate::model;
+
 /// The hook that is called when the stream of the current playback is
 /// prepared.
 type OnPrepared = Box<dyn Fn(&gtk::MediaFile)>;
+
+/// A handler of `PlaybackManager::connect_changed`.
+type ChangedHandler = Rc<dyn Fn()>;
 
 struct Inner {
     /// The shared media stream. Created empty; its source is set by
@@ -40,18 +51,34 @@ struct Inner {
     /// Called when the playback of the current source fails. Set by the
     /// widget that started the playback.
     on_error: RefCell<Option<Box<dyn Fn()>>>,
-    /// The `notify::playing` handlers of the widget that owns the current
-    /// playback. Disconnected when the playback is taken over or stopped.
-    playing_handlers: RefCell<Vec<glib::SignalHandlerId>>,
+    /// The voice note that is played, if the current playback is one. Shown
+    /// by the player bar. Held strongly, so that the bar keeps showing it
+    /// when its chat is closed.
+    audio_message: RefCell<Option<model::Message>>,
+    /// Called when the current playback changes, see `connect_changed`.
+    changed_handlers: RefCell<Vec<(u64, ChangedHandler)>>,
+    /// The id of the next handler of `changed_handlers`.
+    next_handler_id: Cell<u64>,
 }
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        for id in self.playing_handlers.borrow_mut().drain(..) {
-            self.media_file.disconnect(id);
+impl Inner {
+    fn emit_changed(&self) {
+        // Cloned, so that a handler may connect or disconnect handlers.
+        let handlers: Vec<_> = self
+            .changed_handlers
+            .borrow()
+            .iter()
+            .map(|(_, handler)| handler.clone())
+            .collect();
+        for handler in handlers {
+            handler();
         }
     }
 }
+
+/// The id of a handler connected by `PlaybackManager::connect_changed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChangedHandlerId(u64);
 
 /// A cloneable handle to the shared playback engine of a session.
 #[derive(Clone)]
@@ -79,7 +106,9 @@ impl PlaybackManager {
             on_reset_previous: RefCell::new(None),
             on_prepared: RefCell::new(None),
             on_error: RefCell::new(None),
-            playing_handlers: RefCell::new(Vec::new()),
+            audio_message: RefCell::new(None),
+            changed_handlers: RefCell::new(Vec::new()),
+            next_handler_id: Cell::new(0),
         });
 
         media_file.connect_notify_local(
@@ -114,7 +143,69 @@ impl PlaybackManager {
             ),
         );
 
-        Self(inner)
+        let manager = Self(inner);
+
+        // A voice note that played to its end is done: the bar is hidden and
+        // its row shows its play button again.
+        media_file.connect_notify_local(
+            Some("ended"),
+            glib::clone!(
+                #[weak(rename_to = inner)]
+                manager.0,
+                move |media: &gtk::MediaFile, _| {
+                    if media.is_ended() && inner.audio_message.borrow().is_some() {
+                        // Not within the notification of the stream.
+                        let path = inner.current_path.borrow().clone();
+                        glib::idle_add_local_once(glib::clone!(
+                            #[weak]
+                            inner,
+                            move || {
+                                let manager = PlaybackManager(inner);
+                                let still_current =
+                                    path.as_deref().is_some_and(|p| manager.is_current(p));
+                                if still_current && manager.media_file().is_ended() {
+                                    manager.stop();
+                                }
+                            }
+                        ));
+                    }
+                }
+            ),
+        );
+
+        manager
+    }
+
+    /// The voice note that is played or paused, if the current playback is
+    /// one.
+    pub(crate) fn audio_message(&self) -> Option<model::Message> {
+        self.0.audio_message.borrow().clone()
+    }
+
+    /// Marks the current playback, started by `play_file`, as the one of the
+    /// voice note `message`, so that the player bar shows it.
+    pub(crate) fn set_audio_message(&self, message: &model::Message) {
+        self.0.audio_message.replace(Some(message.clone()));
+        self.0.emit_changed();
+    }
+
+    /// Connects `f` to the changes of the current playback: another source
+    /// is played, the playback is stopped or its voice note is set.
+    ///
+    /// The state of the stream itself (playing, position) is notified by
+    /// the stream, see `media_file()`.
+    pub(crate) fn connect_changed<F: Fn() + 'static>(&self, f: F) -> ChangedHandlerId {
+        let id = self.0.next_handler_id.get();
+        self.0.next_handler_id.set(id + 1);
+        self.0.changed_handlers.borrow_mut().push((id, Rc::new(f)));
+        ChangedHandlerId(id)
+    }
+
+    pub(crate) fn disconnect_changed(&self, id: ChangedHandlerId) {
+        self.0
+            .changed_handlers
+            .borrow_mut()
+            .retain(|(handler_id, _)| *handler_id != id.0);
     }
 
     /// The shared media stream, for inspection, binding it to a render
@@ -162,15 +253,11 @@ impl PlaybackManager {
         if let Some(on_reset_previous) = self.0.on_reset_previous.take() {
             on_reset_previous();
         }
-        let old_handlers = std::mem::take(&mut *self.0.playing_handlers.borrow_mut());
-        for id in old_handlers {
-            self.0.media_file.disconnect(id);
-        }
-
         *self.0.on_reset_previous.borrow_mut() = Some(Box::new(on_reset));
         *self.0.on_prepared.borrow_mut() = Some(Box::new(on_prepared));
         *self.0.on_error.borrow_mut() = Some(Box::new(on_error));
         *self.0.current_path.borrow_mut() = Some(glib::GString::from(path));
+        self.0.audio_message.replace(None);
 
         let media = &self.0.media_file;
         media.pause();
@@ -187,23 +274,8 @@ impl PlaybackManager {
                 on_prepared(media);
             }
         }
-    }
 
-    /// Connects `on_playing` to the `playing` state of the stream on
-    /// behalf of the current playback, replacing the connection of the
-    /// previous one.
-    ///
-    /// Must be called by the widget that started the current playback,
-    /// ideally right before or right after `play_file`, so that its
-    /// connection doesn't get disconnected by a subsequent call.
-    pub(crate) fn connect_playing<F: Fn(&gtk::MediaFile) + 'static>(&self, on_playing: F) {
-        let id = self
-            .0
-            .media_file
-            .connect_notify_local(Some("playing"), move |media: &gtk::MediaFile, _| {
-                on_playing(media)
-            });
-        self.0.playing_handlers.borrow_mut().push(id);
+        self.0.emit_changed();
     }
 
     /// Resumes or pauses the current playback.
@@ -225,14 +297,10 @@ impl PlaybackManager {
             on_reset_previous();
         }
 
-        let old_handlers = std::mem::take(&mut *self.0.playing_handlers.borrow_mut());
-        for id in old_handlers {
-            self.0.media_file.disconnect(id);
-        }
-
         *self.0.on_prepared.borrow_mut() = None;
         *self.0.on_error.borrow_mut() = None;
-        *self.0.current_path.borrow_mut() = None;
+        let was_current = self.0.current_path.borrow_mut().take().is_some();
+        self.0.audio_message.replace(None);
 
         self.0.media_file.pause();
         self.0.media_file.clear();
@@ -240,6 +308,10 @@ impl PlaybackManager {
             self.0.media_file.stream_unprepared();
         }
         self.0.media_file.invalidate_contents();
+
+        if was_current {
+            self.0.emit_changed();
+        }
     }
 }
 

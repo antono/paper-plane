@@ -1,3 +1,4 @@
+mod audio_player_bar;
 mod contacts_window;
 mod content;
 mod playback_manager;
@@ -16,6 +17,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::CompositeTemplate;
 
+pub(crate) use self::audio_player_bar::AudioPlayerBar;
 pub(crate) use self::contacts_window::ContactsWindow;
 pub(crate) use self::contacts_window::Row as ContactRow;
 pub(crate) use self::content::Background;
@@ -291,6 +293,7 @@ impl Session {
 #[cfg(test)]
 pub(crate) fn gtk_checks() {
     playback_manager::tests::check();
+    audio_player_bar::gtk_check();
     sidebar::gtk_checks();
     content::gtk_checks();
 }

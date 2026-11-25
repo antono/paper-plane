@@ -66,6 +66,9 @@
             </child>
           </object>
         </child>
+        <child type="top">
+          <object class="PaplAudioPlayerBar"/>
+        </child>
         <property name="content">
           <object class="GtkOverlay">
             <child type="overlay">

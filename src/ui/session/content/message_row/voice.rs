@@ -27,13 +27,15 @@ mod imp {
         pub(super) message: glib::WeakRef<model::Message>,
         pub(super) handler_id: RefCell<Option<glib::SignalHandlerId>>,
         pub(super) loader_handler_id: RefCell<Option<glib::SignalHandlerId>>,
-        /// The handlers of the shared media stream that drive the waveform
-        /// progress. Disconnected when the playback is taken over or stopped.
-        pub(super) progress_handler_ids: RefCell<Vec<glib::SignalHandlerId>>,
+        /// The handlers of the shared media stream and of the playback
+        /// manager that keep the play button and the waveform progress in
+        /// sync with the playback. Connected while the row is mapped.
+        pub(super) stream_handler_ids: RefCell<Vec<glib::SignalHandlerId>>,
+        pub(super) changed_handler_id: Cell<Option<playback_manager::ChangedHandlerId>>,
         /// Whether the playback should start once the download of the voice
         /// note finishes.
         pub(super) play_when_downloaded: Cell<bool>,
-        /// The shared playback engine used to play the voice note.
+        /// The shared playback engine the row follows while it is mapped.
         pub(super) playback: RefCell<Option<playback_manager::PlaybackManager>>,
         /// The playback engine of a test, which has no session view.
         #[cfg(test)]
@@ -115,6 +117,9 @@ mod imp {
                     obj.handle_click();
                 }
             ));
+
+            obj.connect_map(|obj| obj.connect_playback());
+            obj.connect_unmap(|obj| obj.disconnect_playback());
         }
 
         fn dispose(&self) {
@@ -124,11 +129,7 @@ mod imp {
                 self.loader.disconnect(handler_id);
             }
 
-            if let (Some(manager), Some(path)) = (obj.playback_manager(), obj.media_path()) {
-                if manager.is_current(&path) {
-                    manager.stop();
-                }
-            }
+            obj.disconnect_playback();
         }
     }
 
@@ -174,6 +175,7 @@ impl MessageBaseExt for MessageVoiceNote {
         self.update_row(message);
 
         imp.message.set(Some(message));
+        self.sync_playback_ui();
         self.notify("message");
     }
 }
@@ -234,6 +236,7 @@ impl MessageVoiceNote {
         match status {
             FileStatus::Downloaded => {
                 imp.download_button.set_visible(false);
+                self.sync_playback_ui();
 
                 if imp.play_when_downloaded.take() {
                     self.toggle_playback();
@@ -271,16 +274,15 @@ impl MessageVoiceNote {
     /// Plays or pauses the voice note on the shared media stream of the
     /// session.
     fn toggle_playback(&self) {
-        let imp = self.imp();
-
         let Some(manager) = self.playback_manager() else {
             return;
         };
         let Some(path) = self.media_path() else {
             return;
         };
-
-        *imp.playback.borrow_mut() = Some(manager.clone());
+        let Some(message) = self.imp().message.upgrade() else {
+            return;
+        };
 
         if manager.is_current(&path) {
             manager.toggle_pause();
@@ -289,124 +291,129 @@ impl MessageVoiceNote {
 
         manager.play_file(
             &path,
-            clone!(
-                #[weak(rename_to = obj)]
-                self,
-                move || {
-                    obj.reset_playback_ui();
-                }
-            ),
-            clone!(
-                #[weak(rename_to = obj)]
-                self,
-                move |media: &gtk::MediaFile| {
-                    obj.update_waveform_progress(media);
-                    // Set on the prepared stream, see MediaViewerPage
-                    media.set_muted(false);
-                    media.set_loop(false);
-                    media.play();
-                }
-            ),
-            clone!(
-                #[weak(rename_to = obj)]
-                self,
-                move || {
-                    obj.reset_playback_ui();
-                }
-            ),
+            || {},
+            |media: &gtk::MediaFile| {
+                // Set on the prepared stream, see MediaViewerPage
+                media.set_muted(false);
+                media.set_loop(false);
+                media.play();
+            },
+            || {},
         );
-
-        manager.connect_playing(clone!(
-            #[weak(rename_to = obj)]
-            self,
-            move |media: &gtk::MediaFile| {
-                obj.update_play_icon(media.is_playing());
-            }
-        ));
-        self.connect_progress_handlers(&manager);
-
-        // The stream is paused until it is prepared, so the icon reflects
-        // the upcoming playback rather than the current state.
-        self.update_play_icon(true);
+        manager.set_audio_message(&message);
     }
 
-    /// Connects the handlers that keep the waveform progress in sync with
-    /// the position of the shared media stream.
+    /// Connects the handlers that keep the play button and the waveform
+    /// progress in sync with the shared playback.
     ///
-    /// The handlers stay connected as long as this row owns the playback;
-    /// they are disconnected when it is taken over or stopped.
-    fn connect_progress_handlers(&self, manager: &playback_manager::PlaybackManager) {
+    /// Every mapped voice note row follows the playback, so that a row shows
+    /// the playback of its voice note also when it was recycled or created
+    /// after the playback started.
+    fn connect_playback(&self) {
+        self.disconnect_playback();
+
+        let Some(manager) = self.playback_manager() else {
+            return;
+        };
         let imp = self.imp();
         let media = manager.media_file();
 
-        let timestamp_id = media.connect_notify_local(
-            Some("timestamp"),
-            clone!(
+        let ids = ["playing", "timestamp", "duration", "prepared", "ended"]
+            .into_iter()
+            .map(|property| {
+                media.connect_notify_local(
+                    Some(property),
+                    clone!(
+                        #[weak(rename_to = obj)]
+                        self,
+                        move |_: &gtk::MediaFile, _| obj.sync_playback_ui(),
+                    ),
+                )
+            })
+            .collect();
+        *imp.stream_handler_ids.borrow_mut() = ids;
+
+        imp.changed_handler_id
+            .set(Some(manager.connect_changed(clone!(
                 #[weak(rename_to = obj)]
                 self,
-                move |media: &gtk::MediaFile, _| obj.update_waveform_progress(media),
-            ),
-        );
-        let duration_id = media.connect_notify_local(
-            Some("duration"),
-            clone!(
-                #[weak(rename_to = obj)]
-                self,
-                move |media: &gtk::MediaFile, _| obj.update_waveform_progress(media),
-            ),
-        );
+                move || obj.sync_playback_ui()
+            ))));
+        *imp.playback.borrow_mut() = Some(manager);
 
-        imp.progress_handler_ids
-            .borrow_mut()
-            .extend([timestamp_id, duration_id]);
+        self.sync_playback_ui();
     }
 
-    /// Updates the waveform progress according to the position of the
-    /// shared media stream.
-    fn update_waveform_progress(&self, media: &gtk::MediaFile) {
-        let duration = media.duration();
-        if duration > 0 {
-            self.imp()
-                .waveform
-                .set_progress(media.timestamp() as f64 / duration as f64);
-        }
-    }
-
-    /// Disconnects the progress handlers of the shared media stream.
-    fn disconnect_progress_handlers(&self) {
+    /// Disconnects the handlers of `connect_playback`.
+    fn disconnect_playback(&self) {
         let imp = self.imp();
 
-        let ids: Vec<_> = imp.progress_handler_ids.borrow_mut().drain(..).collect();
-        if let Some(manager) = imp.playback.borrow().clone() {
-            let media = manager.media_file();
-            for id in ids {
-                media.disconnect(id);
-            }
+        let Some(manager) = imp.playback.take() else {
+            return;
+        };
+        let media = manager.media_file();
+        for id in imp.stream_handler_ids.take() {
+            media.disconnect(id);
+        }
+        if let Some(id) = imp.changed_handler_id.take() {
+            manager.disconnect_changed(id);
         }
     }
 
-    /// Restores the play icon and the waveform progress.
+    /// Whether `manager` plays the voice note of the row.
     ///
-    /// This is called when another playback takes over the shared stream,
-    /// or when the playback of this voice note is stopped or fails.
-    fn reset_playback_ui(&self) {
-        let imp = self.imp();
-
-        self.disconnect_progress_handlers();
-
-        imp.play_image
-            .set_icon_name(Some("media-playback-start-symbolic"));
-        imp.waveform.set_progress(0.0);
+    /// The voice note is recognized by its message, since the row of a
+    /// voice note that is played may not know the downloaded file yet (a
+    /// recycled one, for example).
+    fn is_played_by(&self, manager: &playback_manager::PlaybackManager) -> bool {
+        let Some(message) = self.imp().message.upgrade() else {
+            return false;
+        };
+        match manager.audio_message() {
+            Some(played) => {
+                played == message
+                    || (played.id() == message.id() && played.chat_().id() == message.chat_().id())
+            }
+            None => self
+                .media_path()
+                .is_some_and(|path| manager.is_current(&path)),
+        }
     }
 
-    fn update_play_icon(&self, is_playing: bool) {
-        let icon_name = if is_playing {
+    /// Shows whether the voice note is played and how far.
+    fn sync_playback_ui(&self) {
+        let imp = self.imp();
+
+        let current = imp
+            .playback
+            .borrow()
+            .clone()
+            .or_else(|| self.playback_manager())
+            .filter(|manager| self.is_played_by(manager))
+            .map(|manager| manager.media_file());
+
+        let (playing, progress) = match current {
+            Some(media) => {
+                // The stream is paused until it is prepared, so a pending
+                // playback is shown as a playing one.
+                let pending = !media.is_prepared() && media.error().is_none();
+                let duration = media.duration();
+                let progress = if duration > 0 && !media.is_ended() {
+                    media.timestamp() as f64 / duration as f64
+                } else {
+                    0.0
+                };
+                (media.is_playing() || pending, progress)
+            }
+            None => (false, 0.0),
+        };
+
+        imp.play_image.set_icon_name(Some(if playing {
             "media-playback-pause-symbolic"
         } else {
             "media-playback-start-symbolic"
-        };
-
-        self.imp().play_image.set_icon_name(Some(icon_name));
+        }));
+        imp.waveform.set_progress(progress);
     }
 }
 
@@ -465,6 +472,16 @@ pub(crate) fn gtk_check() {
         row.set_message(&message);
         let imp = row.imp();
 
+        // The row follows the playback while it is shown.
+        let window = gtk::Window::new();
+        window.set_child(Some(&row));
+        window.present();
+        let context = glib::MainContext::ref_thread_default();
+        while !row.is_mapped() {
+            context.iteration(true);
+        }
+        let icon = || imp.play_image.icon_name().unwrap_or_default();
+
         // Not downloaded: a click downloads the voice note (f966e155)...
         assert!(imp.download_button.is_visible());
         row.handle_click();
@@ -479,7 +496,6 @@ pub(crate) fn gtk_check() {
         session.handle_update(tdlib::enums::Update::File(tdlib::types::UpdateFile {
             file: downloaded,
         }));
-        let context = glib::MainContext::ref_thread_default();
         while context.iteration(false) {}
 
         assert_eq!(imp.loader.status(), FileStatus::Downloaded);
@@ -489,6 +505,8 @@ pub(crate) fn gtk_check() {
             manager.is_current(wav.to_str().unwrap()),
             "the voice note is not played"
         );
+        assert_eq!(manager.audio_message().as_ref(), Some(&message));
+        assert_eq!(icon(), "media-playback-pause-symbolic");
 
         // Once prepared it plays; a second click pauses it.
         let media = manager.media_file();
@@ -501,8 +519,45 @@ pub(crate) fn gtk_check() {
             "the voice note did not start: {:?}",
             media.error()
         );
+        assert_eq!(icon(), "media-playback-pause-symbolic");
         row.handle_click();
         assert!(!media.is_playing());
+        assert_eq!(icon(), "media-playback-start-symbolic");
+        if media.timestamp() > 0 {
+            assert!(imp.waveform.progress() > 0.0, "the progress is not shown");
+        }
+
+        // Another row of the same voice note (a recycled one, for example)
+        // shows the playback as well.
+        let other: MessageVoiceNote = glib::Object::new();
+        other.imp().test_playback.replace(Some(manager.clone()));
+        other.set_message(&message);
+        window.set_child(Some(&other));
+        while !other.is_mapped() {
+            context.iteration(true);
+        }
+        assert_eq!(
+            other.imp().play_image.icon_name().unwrap_or_default(),
+            "media-playback-start-symbolic"
+        );
+        manager.toggle_pause();
+        // The short file may have ended already, which stops the playback.
+        let expected = if media.is_playing() {
+            "media-playback-pause-symbolic"
+        } else {
+            "media-playback-start-symbolic"
+        };
+        assert_eq!(
+            other.imp().play_image.icon_name().unwrap_or_default(),
+            expected
+        );
+
         manager.stop();
+        assert!(manager.audio_message().is_none());
+        assert_eq!(
+            other.imp().play_image.icon_name().unwrap_or_default(),
+            "media-playback-start-symbolic"
+        );
+        window.destroy();
     });
 }

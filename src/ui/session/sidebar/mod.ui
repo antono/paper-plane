@@ -197,6 +197,15 @@
                   </object>
                 </child>
 
+                <!-- Next to the chat history, the player bar is shown above it -->
+                <child type="top">
+                  <object class="PaplAudioPlayerBar">
+                    <binding name="enabled">
+                      <lookup name="compact">PaplSidebar</lookup>
+                    </binding>
+                  </object>
+                </child>
+
                 <child type="top">
                   <object class="PaplSidebarChatFolderBar" id="folder_bar">
                     <binding name="chat-folder-list">
