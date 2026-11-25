@@ -2,9 +2,14 @@
   description = "Paper Plane: a Telegram client for GNOME";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.crane.url = "github:ipetkov/crane";
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      crane,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -58,23 +63,93 @@
           rlottie
           (tdlibFor pkgs)
         ];
+
+      version = "0.1.0-beta.6";
+
+      # The dependencies of the application, built once by crane and reused
+      # by the Meson build as long as Cargo.lock and the build environment do
+      # not change, so that a change to the application itself only rebuilds
+      # the application.
+      # The vendored crates, shared by the dependencies and the application:
+      # Cargo tells crates apart by the path of their sources, so building
+      # them from two different copies would rebuild all of them.
+      cargoVendorDirFor =
+        pkgs: (crane.mkLib pkgs).vendorCargoDeps { src = pkgs.lib.cleanSource ./.; };
+
+      # The compiler wrapper of Nix seeds the compiler with the hash of the
+      # derivation, which bindgen sees through BINDGEN_EXTRA_CLANG_ARGS. The
+      # seed is left out so that the dependencies and the application build
+      # with the same arguments, else bindgen and the crates using it rebuild.
+      dropRandomSeed = ''
+        BINDGEN_EXTRA_CLANG_ARGS=$(sed -E 's/ ?-frandom-seed=[^ ]*//g' <<< "$BINDGEN_EXTRA_CLANG_ARGS")
+        export BINDGEN_EXTRA_CLANG_ARGS
+      '';
+
+      cargoArtifactsFor =
+        pkgs:
+        let
+          craneLib = crane.mkLib pkgs;
+          src = pkgs.lib.cleanSource ./.;
+        in
+        craneLib.buildDepsOnly {
+          pname = "paper-plane";
+          inherit version src;
+          cargoVendorDir = cargoVendorDirFor pkgs;
+          # The crates of the workspace are replaced by empty ones, except for
+          # the vendored tdlib-rs: generating and compiling the TDLib API is
+          # the longest part of the build, and it only changes with TDLib.
+          dummySrc = craneLib.mkDummySrc {
+            inherit src;
+            extraDummyScript = ''
+              rm -rf $out/tdlib-rs
+              cp -r --no-preserve=mode ${./tdlib-rs} $out/tdlib-rs
+            '';
+          };
+          # The same inputs as the Meson build, as the build scripts of the
+          # dependencies look at the environment they make up, and would run
+          # again in a different one, but cargo builds instead of Meson.
+          nativeBuildInputs = nativeBuildInputsFor pkgs;
+          buildInputs = buildInputsFor pkgs;
+          dontUseMesonConfigure = true;
+          dontUseNinjaBuild = true;
+          dontUseNinjaInstall = true;
+          dontUseNinjaCheck = true;
+          dontWrapGApps = true;
+          preBuild = dropRandomSeed;
+          # The same profile as the Meson build, see src/meson.build.
+          cargoCheckCommand = "true";
+          cargoBuildCommand = "cargo build --release";
+          doCheck = false;
+        };
     in
     {
       packages = forAllSystems (pkgs: {
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.paper-plane;
 
+        paper-plane-deps = cargoArtifactsFor pkgs;
+
         paper-plane = pkgs.stdenv.mkDerivation {
           pname = "paper-plane";
-          version = "0.1.0-beta.6";
+          inherit version;
 
           src = pkgs.lib.cleanSource ./.;
 
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./Cargo.lock;
-          };
+          cargoVendorDir = cargoVendorDirFor pkgs;
 
-          nativeBuildInputs = nativeBuildInputsFor pkgs ++ [ pkgs.rustPlatform.cargoSetupHook ];
+          nativeBuildInputs = nativeBuildInputsFor pkgs ++ [ pkgs.zstd ];
           buildInputs = buildInputsFor pkgs;
+
+          # The Cargo target directory of the Meson build (src/meson.build)
+          # starts with the prebuilt dependencies.
+          cargoArtifacts = self.packages.${pkgs.stdenv.hostPlatform.system}.paper-plane-deps;
+          # The settings match the ones crane builds the dependencies with.
+          preConfigure = ''
+            mkdir -p .cargo build/src
+            cat "$cargoVendorDir/config.toml" >> .cargo/config.toml
+            export CARGO_BUILD_INCREMENTAL=false
+            ${dropRandomSeed}
+            zstd -d "$cargoArtifacts/target.tar.zst" --stdout | tar -x -C build/src
+          '';
 
           # Telegram API credentials default to the limited test ones, see
           # meson_options.txt. Override with
