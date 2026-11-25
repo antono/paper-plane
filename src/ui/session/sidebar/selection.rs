@@ -205,9 +205,20 @@ impl Selection {
             0
         };
 
+        // The items of another chat list are other objects, even for the
+        // same chats, and a list view only reuses the row of an item for the
+        // same item. Removing the old items before adding the new ones lets
+        // the rows of the old items go back to the pool of the chat list
+        // before the rows of the new items are made, see
+        // `SidebarChatList::setup_factory`.
+        imp.model.replace(None);
+        if n_items_before > 0 {
+            self.items_changed(0, n_items_before, 0);
+        }
         imp.model.replace(model);
-
-        self.items_changed(0, n_items_before, n_items);
+        if n_items > 0 {
+            self.items_changed(0, 0, n_items);
+        }
 
         self.notify("model");
     }

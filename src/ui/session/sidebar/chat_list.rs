@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use glib::clone;
 use glib::Properties;
@@ -11,6 +12,10 @@ use gtk::CompositeTemplate;
 use crate::model;
 use crate::ui;
 use crate::utils;
+
+/// The most rows a chat list keeps for reuse. A list view shows at most
+/// 200 rows, see `GTK_LIST_VIEW_MAX_LIST_ITEMS`.
+const ROW_POOL_CAPACITY: usize = 256;
 
 mod imp {
     use super::*;
@@ -32,6 +37,11 @@ mod imp {
         pub(super) scrolled_window: TemplateChild<gtk::ScrolledWindow>,
         #[template_child]
         pub(super) list_view: TemplateChild<gtk::ListView>,
+        /// The rows that the list view let go of, see `ChatList::setup_factory`.
+        pub(super) row_pool: RefCell<Vec<ui::SidebarRow>>,
+        /// The rows of the list items of the list view. GTK takes the child
+        /// of a list item before tearing it down.
+        pub(super) rows: RefCell<HashMap<gtk::ListItem, ui::SidebarRow>>,
     }
 
     #[glib::object_subclass]
@@ -64,8 +74,15 @@ mod imp {
             self.derived_property(id, pspec)
         }
 
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().setup_factory();
+        }
+
         fn dispose(&self) {
             utils::unparent_children(&*self.obj());
+            self.rows.take();
+            self.row_pool.take();
         }
     }
 
@@ -145,6 +162,66 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
+impl ChatList {
+    /// Sets up the factory of the rows of the list view.
+    ///
+    /// Building a row from its template is the most expensive part of
+    /// showing a chat, and switching the chat folder replaces every item of
+    /// the list, for which the list view drops all of its rows and makes new
+    /// ones. So the rows it drops are kept in a pool, and new rows are taken
+    /// from it. As the list view makes the new rows before dropping the old
+    /// ones, the selection reports a new chat list as a removal of all the
+    /// rows followed by an addition, see `SidebarSelection::set_model`.
+    fn setup_factory(&self) {
+        let factory = gtk::SignalListItemFactory::new();
+
+        factory.connect_setup(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, list_item| {
+                let imp = obj.imp();
+                let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
+                let row = imp.row_pool.borrow_mut().pop().unwrap_or_default();
+                list_item.set_child(Some(&row));
+                imp.rows.borrow_mut().insert(list_item.clone(), row);
+            }
+        ));
+        factory.connect_bind(|_, list_item| {
+            let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
+            if let Some(row) = list_item.child().and_downcast::<ui::SidebarRow>() {
+                row.set_item(list_item.item().and_downcast_ref());
+            }
+        });
+        // An unbound row keeps its item until it is bound to another one or
+        // torn down: emptying it would update it twice when it is recycled.
+        factory.connect_teardown(clone!(
+            #[weak(rename_to = obj)]
+            self,
+            move |_, list_item| {
+                let imp = obj.imp();
+                let list_item = list_item.downcast_ref::<gtk::ListItem>().unwrap();
+                let Some(row) = imp.rows.borrow_mut().remove(list_item) else {
+                    return;
+                };
+                if list_item.child().is_some() {
+                    list_item.set_child(None::<&gtk::Widget>);
+                }
+                if row.parent().is_some() {
+                    row.unparent();
+                }
+                row.set_item(None);
+
+                let mut pool = imp.row_pool.borrow_mut();
+                if pool.len() < ROW_POOL_CAPACITY {
+                    pool.push(row);
+                }
+            }
+        ));
+
+        self.imp().list_view.set_factory(Some(&factory));
+    }
+}
+
 #[cfg(test)]
 impl ChatList {
     fn new_for_test() -> Self {
@@ -188,5 +265,98 @@ pub(crate) fn gtk_check() {
                 "a PaplSidebarChatList inside a GtkScrolledWindow in mod.ui"
             );
         }
+    });
+}
+
+/// The rows are reused across chat lists, see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check_row_pool() {
+    use gtk::gio;
+
+    use crate::model::test_support::*;
+
+    eprintln!("chat list reuses its rows for another chat list");
+
+    isolated(|| {
+        let session = session();
+        let position = tdlib::types::ChatPosition {
+            list: tdlib::enums::ChatList::Main,
+            order: 1,
+            is_pinned: false,
+            source: None,
+        };
+        let chats: Vec<_> = (1..=5)
+            .map(|id| {
+                add_user(&session, id);
+                add_private_chat(&session, id, id, &format!("Chat {id}"))
+            })
+            .collect();
+        // The same chats in two chat lists are different items.
+        let chat_list = || {
+            let store = gio::ListStore::new::<model::ChatListItem>();
+            for chat in &chats {
+                store.append(&model::ChatListItem::new(chat, &position));
+            }
+            store.upcast::<gio::ListModel>()
+        };
+
+        let list = ChatList::new_for_test();
+        let window = gtk::Window::builder()
+            .default_width(360)
+            .default_height(600)
+            .child(&list)
+            .build();
+        window.present();
+
+        let context = glib::MainContext::default();
+        let rows = || {
+            let mut rows = Vec::new();
+            let mut child = list.imp().list_view.first_child();
+            while let Some(widget) = child {
+                if let Some(row) = widget.first_child().and_downcast::<ui::SidebarRow>() {
+                    rows.push(row);
+                }
+                child = widget.next_sibling();
+            }
+            rows
+        };
+        let settle = |n_rows: usize| {
+            for _ in 0..200 {
+                while context.iteration(false) {}
+                if rows().len() == n_rows {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("{} rows instead of {n_rows}", rows().len());
+        };
+
+        list.imp().selection.set_model(Some(chat_list()));
+        settle(chats.len());
+        let before = rows();
+
+        list.imp().selection.set_model(Some(chat_list()));
+        settle(chats.len());
+        let after = rows();
+
+        for row in &after {
+            assert!(before.contains(row), "a new row instead of a pooled one");
+            assert!(row.item().is_some(), "a row without its item");
+        }
+        assert!(list.imp().row_pool.borrow().is_empty());
+
+        // The rows of an emptied list wait in the pool, without their items.
+        list.imp().selection.set_model(None);
+        settle(0);
+        let pool = list.imp().row_pool.borrow().clone();
+        assert_eq!(pool.len(), chats.len());
+        assert!(pool
+            .iter()
+            .all(|row| row.item().is_none() && row.parent().is_none()));
+        assert!(list.imp().rows.borrow().is_empty());
+        // A pooled row still has the widgets of its template.
+        assert!(pool.iter().all(|row| row.first_child().is_some()));
+
+        window.destroy();
     });
 }

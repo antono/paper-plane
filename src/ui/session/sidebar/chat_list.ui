@@ -25,24 +25,6 @@
                 </binding>
               </object>
             </property>
-            <property name="factory">
-              <object class="GtkBuilderListItemFactory">
-                <property name="bytes"><![CDATA[
-<?xml version="1.0" encoding="UTF-8"?>
-<interface>
-  <template class="GtkListItem">
-    <property name="child">
-      <object class="PaplSidebarRow">
-        <binding name="item">
-          <lookup name="item">GtkListItem</lookup>
-        </binding>
-      </object>
-    </property>
-  </template>
-</interface>
-                ]]></property>
-              </object>
-            </property>
             <style>
               <class name="navigation-sidebar"/>
             </style>

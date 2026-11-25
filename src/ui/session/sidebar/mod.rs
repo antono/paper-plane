@@ -248,4 +248,5 @@ pub(crate) fn gtk_checks() {
     row::gtk_check();
     selection::gtk_check();
     chat_list::gtk_check();
+    chat_list::gtk_check_row_pool();
 }
