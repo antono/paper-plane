@@ -31,6 +31,9 @@ const INITIAL_LOAD_LIMIT: i32 = 30;
 /// a TDLib request on every change of the visible messages.
 const VIEW_MESSAGES_DELAY_MS: u64 = 150;
 
+/// How long the message that was jumped to stays tinted once it is shown.
+const HIGHLIGHT_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+
 mod imp {
     use super::*;
 
@@ -45,6 +48,11 @@ mod imp {
         pub(super) is_auto_scrolling: Cell<bool>,
         pub(super) is_loading_messages: Cell<bool>,
         pub(super) sticky: Cell<bool>,
+        /// The message that was jumped to, which is tinted for a moment, or 0.
+        pub(super) highlighted_message_id: Cell<i64>,
+        /// Counts the highlights, so that the end of an older one does not
+        /// end a newer one.
+        pub(super) highlight_generation: Cell<u32>,
         pub(super) viewed_message_ids: RefCell<HashSet<i64>>,
         pub(super) viewed_message_ids_changed: Cell<bool>,
         pub(super) view_messages_scheduled: Cell<bool>,
@@ -958,10 +966,12 @@ impl ChatHistory {
 
         if let Err(e) = model.load_around_anchor().await {
             log::warn!("Couldn't load the messages around the anchor: {}", e);
+            self.end_highlight_later(anchor);
             return;
         }
 
         let Some(mut position) = model.find_message_position(anchor) else {
+            self.end_highlight_later(anchor);
             return;
         };
 
@@ -990,15 +1000,17 @@ impl ChatHistory {
         for delay in [50, 200] {
             glib::timeout_future(std::time::Duration::from_millis(delay)).await;
             let Some(current) = imp.model.borrow().as_ref().cloned() else {
-                return;
+                break;
             };
             if &current != model || imp.list_view.model().map_or(0, |m| m.n_items()) != n_items {
                 // Another history was set, or messages were added meanwhile.
-                return;
+                break;
             }
             imp.list_view
                 .scroll_to(position, gtk::ListScrollFlags::NONE, None);
         }
+
+        self.end_highlight_later(anchor);
     }
 
     /// Installs the chat history model in the list view and fills it
@@ -1012,6 +1024,11 @@ impl ChatHistory {
     /// messages or jumping to a specific message.
     fn set_history_model(&self, chat: &model::Chat, model: &model::ChatHistoryModel) {
         let imp = self.imp();
+
+        // A highlight belongs to the history that was jumped to.
+        if model.anchor() != imp.highlighted_message_id.get() {
+            self.set_highlighted_message_id(0);
+        }
 
         // Claim the loading flag synchronously, so that the scroll handler
         // can't start a concurrent load before the initial fill below had
@@ -1149,7 +1166,57 @@ impl ChatHistory {
 
         let model = model::ChatHistoryModel::new_for_message(&chat, message_id);
 
+        self.set_highlighted_message_id(message_id);
         self.set_history_model(&chat, &model);
+    }
+
+    /// The message that was jumped to, e.g. from the profile or a reply,
+    /// which is tinted for a moment, or 0.
+    pub(crate) fn highlighted_message_id(&self) -> i64 {
+        self.imp().highlighted_message_id.get()
+    }
+
+    fn set_highlighted_message_id(&self, message_id: i64) {
+        let imp = self.imp();
+        if imp.highlighted_message_id.get() == message_id {
+            return;
+        }
+        imp.highlighted_message_id.set(message_id);
+        imp.highlight_generation
+            .set(imp.highlight_generation.get().wrapping_add(1));
+
+        // The rows that are shown follow at once, the others when they are
+        // shown.
+        let mut child = imp.list_view.first_child();
+        while let Some(widget) = child {
+            if let Some(row) = widget.first_child().and_downcast::<ui::ChatHistoryRow>() {
+                row.sync_highlight();
+            }
+            child = widget.next_sibling();
+        }
+    }
+
+    /// Ends the highlight of `message_id` after a moment, once it was
+    /// scrolled to.
+    fn end_highlight_later(&self, message_id: i64) {
+        let imp = self.imp();
+        if imp.highlighted_message_id.get() != message_id {
+            return;
+        }
+        let generation = imp.highlight_generation.get();
+
+        glib::timeout_add_local_once(
+            HIGHLIGHT_DURATION,
+            clone!(
+                #[weak(rename_to = obj)]
+                self,
+                move || {
+                    if obj.imp().highlight_generation.get() == generation {
+                        obj.set_highlighted_message_id(0);
+                    }
+                }
+            ),
+        );
     }
 
     pub(crate) fn sticky(&self) -> bool {
@@ -1745,10 +1812,8 @@ fn message_tap_gtk_check() {
             .find(|click| click.is_touch_only())
             .expect("the tap gesture");
         let tap_at = |widget: &gtk::Widget, n_press: i32| {
-            let center = graphene::Point::new(
-                widget.width() as f32 / 2.0,
-                widget.height() as f32 / 2.0,
-            );
+            let center =
+                graphene::Point::new(widget.width() as f32 / 2.0, widget.height() as f32 / 2.0);
             let point = widget.compute_point(&base, &center).unwrap();
             tap.emit_by_name::<()>(
                 "released",
@@ -1781,11 +1846,17 @@ fn message_tap_gtk_check() {
 
         // The paid chip only shows the stars, a tap goes to the message.
         tap_at(chip(true).upcast_ref(), 1);
-        assert!(menu.is_visible(), "a tap on the paid reaction opens the menu");
+        assert!(
+            menu.is_visible(),
+            "a tap on the paid reaction opens the menu"
+        );
         menu.popdown();
 
         tap_at(label.upcast_ref(), 2);
-        assert!(!menu.is_visible(), "the second tap of a double tap does not");
+        assert!(
+            !menu.is_visible(),
+            "the second tap of a double tap does not"
+        );
 
         history
             .activate_action("chat-history.toggle-selection", Some(&1i64.to_variant()))

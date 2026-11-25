@@ -176,7 +176,9 @@ mod imp {
 
         fn constructed(&self) {
             self.parent_constructed();
-            self.obj().ensure_check();
+            let obj = self.obj();
+            obj.add_css_class("message-row");
+            obj.ensure_check();
         }
 
         fn dispose(&self) {
@@ -386,6 +388,16 @@ impl Row {
             } else {
                 widget.remove_css_class(class);
             }
+        }
+    }
+
+    /// Tints the row for a moment, for the message that was jumped to, see
+    /// `ChatHistory::highlighted_message_id`.
+    pub(crate) fn set_highlighted(&self, highlighted: bool) {
+        if highlighted {
+            self.add_css_class("highlighted-message");
+        } else {
+            self.remove_css_class("highlighted-message");
         }
     }
 

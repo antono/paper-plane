@@ -76,6 +76,7 @@ mod imp {
                 self.selection_handler.replace(Some((selection, handler)));
             }
             obj.sync_selection();
+            obj.sync_highlight();
         }
 
         fn unmap(&self) {
@@ -185,6 +186,7 @@ impl ChatHistoryRow {
 
         self.imp().item.replace(item);
         self.sync_selection();
+        self.sync_highlight();
         self.notify("item");
     }
 
@@ -203,6 +205,28 @@ impl ChatHistoryRow {
         if let Some(history) = self.chat_history() {
             self.sync_selection_with(history.selection());
         }
+    }
+
+    /// Tints the row if it shows the message that was jumped to. Like the
+    /// selection, the state is computed from the item, as the row is
+    /// recycled.
+    pub(crate) fn sync_highlight(&self) {
+        if !self.is_mapped() {
+            return;
+        }
+        let Some(row) = self.child().and_downcast::<ui::MessageRow>() else {
+            return;
+        };
+        let highlighted_id = self
+            .chat_history()
+            .map(|history| history.highlighted_message_id())
+            .unwrap_or_default();
+        let highlighted = highlighted_id != 0
+            && self.item().is_some_and(|item| {
+                item.is::<model::ChatHistoryItem>()
+                    && viewed_message_ids(&item).contains(&highlighted_id)
+            });
+        row.set_highlighted(highlighted);
     }
 
     pub(crate) fn sync_selection_with(&self, selection: &ui::MessageSelection) {

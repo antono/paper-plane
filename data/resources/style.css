@@ -176,6 +176,18 @@ listview.chat-history > row {
   border-radius: 9px;
 }
 
+/* The message jumped to, e.g. from the profile or a reply, is tinted for a
+   moment, and the tint fades out */
+.message-row {
+  border-radius: 9px;
+  transition: background-color 600ms ease-out;
+}
+
+.message-row.highlighted-message {
+  background-color: alpha(@accent_bg_color, .3);
+  transition: none;
+}
+
 /* Values for the cairo renderer */
 .fallback {
   background: @view_bg_color;
