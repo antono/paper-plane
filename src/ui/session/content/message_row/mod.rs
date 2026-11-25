@@ -746,7 +746,7 @@ impl Row {
                     {
                         self.update_specific_content::<_, ui::MessageSticker>(message_);
                     }
-                    MessageDocument(_) => {
+                    MessageDocument(_) | MessageAudio(_) => {
                         self.update_specific_content::<_, ui::MessageDocument>(message_);
                     }
                     MessageVoiceNote(_) => {
@@ -908,6 +908,7 @@ pub(crate) fn gtk_checks() {
     quick_reactions::gtk_check();
     base::gtk_check();
     video::gtk_check();
+    document::gtk_check();
 
     eprintln!("message label lookup for Copy Text");
 

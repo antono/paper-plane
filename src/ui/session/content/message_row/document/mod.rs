@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+use gettextrs::gettext;
 use glib::clone;
 use gtk::gdk;
 use gtk::gio;
@@ -195,21 +196,18 @@ impl MessageDocument {
     }
 
     fn update_document(&self, message: &model::Message) {
-        if let tdlib::enums::MessageContent::MessageDocument(data) = message.content().0 {
+        if let Some(content) = FileContent::of(message.content().0) {
             let imp = self.imp();
 
-            let message_text = utils::parse_formatted_text(data.caption);
+            let message_text = utils::parse_formatted_text(content.caption);
             imp.message_bubble.set_label(message_text);
 
-            imp.file_name_label.set_label(&data.document.file_name);
+            imp.file_name_label.set_label(&content.name);
 
-            self.try_load_thumbnail(message);
+            self.try_load_thumbnail(content.thumbnail, content.minithumbnail);
 
-            imp.loader.bind(
-                &message.chat_().session_(),
-                MediaType::File,
-                &data.document.document,
-            );
+            imp.loader
+                .bind(&message.chat_().session_(), MediaType::File, &content.file);
 
             // In contrast to photos and videos, documents are downloaded as
             // soon as they are shown in the history, even if the widget is
@@ -346,38 +344,146 @@ impl MessageDocument {
         ));
     }
 
-    fn try_load_thumbnail(&self, message: &model::Message) {
-        if let tdlib::enums::MessageContent::MessageDocument(data) = message.content().0 {
-            let imp = self.imp();
-            if let Some(thumbnail) = data.document.thumbnail {
-                imp.status_indicator.set_masked(false);
-                imp.file_thumbnail_picture.set_visible(true);
-                imp.file_box.add_css_class("with-thumbnail");
-                if thumbnail.file.local.is_downloading_completed {
-                    self.show_thumbnail_file(thumbnail.file.local.path);
-                } else {
-                    imp.thumbnail_path.replace(None);
-                    let minithumbnail = data
-                        .document
-                        .minithumbnail
-                        .as_ref()
-                        .and_then(ui::texture_loader::minithumbnail);
-                    imp.file_thumbnail_picture
-                        .set_paintable(minithumbnail.as_ref());
-
-                    // The thumbnail is downloaded when the widget is shown, so
-                    // that thumbnails that are only scrolled past are not
-                    // downloaded.
-                    imp.pending_thumbnail_file_id.set(thumbnail.file.id);
-                    self.maybe_download_thumbnail();
-                }
+    fn try_load_thumbnail(
+        &self,
+        thumbnail: Option<tdlib::types::Thumbnail>,
+        minithumbnail: Option<tdlib::types::Minithumbnail>,
+    ) {
+        let imp = self.imp();
+        if let Some(thumbnail) = thumbnail {
+            imp.status_indicator.set_masked(false);
+            imp.file_thumbnail_picture.set_visible(true);
+            imp.file_box.add_css_class("with-thumbnail");
+            if thumbnail.file.local.is_downloading_completed {
+                self.show_thumbnail_file(thumbnail.file.local.path);
             } else {
                 imp.thumbnail_path.replace(None);
-                imp.status_indicator.set_masked(true);
-                imp.file_thumbnail_picture.set_visible(false);
+                let minithumbnail = minithumbnail
+                    .as_ref()
+                    .and_then(ui::texture_loader::minithumbnail);
                 imp.file_thumbnail_picture
-                    .set_paintable(gdk::Paintable::NONE);
+                    .set_paintable(minithumbnail.as_ref());
+
+                // The thumbnail is downloaded when the widget is shown, so
+                // that thumbnails that are only scrolled past are not
+                // downloaded.
+                imp.pending_thumbnail_file_id.set(thumbnail.file.id);
+                self.maybe_download_thumbnail();
             }
+        } else {
+            imp.thumbnail_path.replace(None);
+            imp.status_indicator.set_masked(true);
+            imp.file_box.remove_css_class("with-thumbnail");
+            imp.file_thumbnail_picture.set_visible(false);
+            imp.file_thumbnail_picture
+                .set_paintable(gdk::Paintable::NONE);
         }
     }
+}
+
+/// What the widget shows of a file message: a document, or an audio file
+/// (music), which is shown as a file with its album cover as the thumbnail.
+struct FileContent {
+    caption: tdlib::types::FormattedText,
+    name: String,
+    file: tdlib::types::File,
+    thumbnail: Option<tdlib::types::Thumbnail>,
+    minithumbnail: Option<tdlib::types::Minithumbnail>,
+}
+
+impl FileContent {
+    fn of(content: tdlib::enums::MessageContent) -> Option<Self> {
+        match content {
+            tdlib::enums::MessageContent::MessageDocument(data) => Some(Self {
+                caption: data.caption,
+                name: data.document.file_name,
+                file: data.document.document,
+                thumbnail: data.document.thumbnail,
+                minithumbnail: data.document.minithumbnail,
+            }),
+            tdlib::enums::MessageContent::MessageAudio(data) => Some(Self {
+                caption: data.caption,
+                name: audio_name(&data.audio),
+                file: data.audio.audio,
+                thumbnail: data.audio.album_cover_thumbnail,
+                minithumbnail: data.audio.album_cover_minithumbnail,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The name of an audio file: its performer and title, or its file name if
+/// it has no title.
+fn audio_name(audio: &tdlib::types::Audio) -> String {
+    match (audio.performer.is_empty(), audio.title.is_empty()) {
+        (_, true) if !audio.file_name.is_empty() => audio.file_name.clone(),
+        (_, true) => gettext("Audio"),
+        (true, false) => audio.title.clone(),
+        (false, false) => format!("{} – {}", audio.performer, audio.title),
+    }
+}
+
+/// Music is shown as a file (it was "unsupported"), see `ui::tests`.
+#[cfg(test)]
+pub(crate) fn gtk_check() {
+    use crate::model::test_support::*;
+
+    eprintln!("audio messages are shown as files");
+
+    let audio = |title: &str, performer: &str, file_name: &str| {
+        tdlib::enums::MessageContent::MessageAudio(tdlib::types::MessageAudio {
+            audio: tdlib::types::Audio {
+                duration: 137,
+                title: title.to_owned(),
+                performer: performer.to_owned(),
+                file_name: file_name.to_owned(),
+                mime_type: "audio/mpeg".to_owned(),
+                album_cover_minithumbnail: None,
+                album_cover_thumbnail: Some(tdlib::types::Thumbnail {
+                    format: tdlib::enums::ThumbnailFormat::Jpeg,
+                    width: 90,
+                    height: 90,
+                    file: file(2),
+                }),
+                external_album_covers: vec![],
+                audio: file(1),
+            },
+            caption: formatted_text("a caption"),
+        })
+    };
+    let document = tdlib::enums::MessageContent::MessageDocument(tdlib::types::MessageDocument {
+        document: tdlib::types::Document {
+            file_name: "notes.txt".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            minithumbnail: None,
+            thumbnail: None,
+            document: file(3),
+        },
+        caption: formatted_text(""),
+    });
+
+    isolated(|| {
+        let session = session();
+        let chat = add_chat(&session, ME);
+        let message = |id, content| model::Message::new(&chat, message(ME, id, DAY, 0, content));
+
+        let row: MessageDocument = glib::Object::new();
+        row.set_message(&message(1, audio("Song", "Band", "song.mp3")));
+        let imp = row.imp();
+        assert_eq!(imp.file_name_label.label(), "Band – Song");
+        assert_eq!(imp.message_bubble.label_text(), "a caption");
+        // The album cover is the thumbnail.
+        assert!(imp.file_box.has_css_class("with-thumbnail"));
+
+        row.set_message(&message(2, audio("", "Band", "song.mp3")));
+        assert_eq!(imp.file_name_label.label(), "song.mp3");
+        row.set_message(&message(3, audio("Song", "", "")));
+        assert_eq!(imp.file_name_label.label(), "Song");
+
+        // A file without a thumbnail does not keep the style of the cover.
+        row.set_message(&message(4, document));
+        assert_eq!(imp.file_name_label.label(), "notes.txt");
+        assert!(!imp.file_box.has_css_class("with-thumbnail"));
+    });
 }
