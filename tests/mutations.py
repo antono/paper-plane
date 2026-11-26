@@ -15,8 +15,8 @@ dbus-run-session, gdbus). Every file is restored afterwards.
 
 import argparse
 import os
-import re
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -589,7 +589,7 @@ def meson_failure(build, test):
     log = (pathlib.Path(build) / "meson-logs/testlog.txt").read_text(errors="replace")
     if f":{test}\n" not in log:
         return None, log
-    passed = re.search(rf"^test:\s+.*:{re.escape(test)}\n(?:.*\n){{0,3}}?result:\s+exit status 0$", log, re.M)
+    passed = re.search(rf"^test:\s+.*:{re.escape(test)}\n(?:.*\n){{0,3}}?result:\s+exit status 0$", log, re.MULTILINE)
     return passed is None, log
 
 
